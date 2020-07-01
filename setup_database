@@ -1,0 +1,417 @@
+#!/bin/bash
+
+# setup_database
+# Config creation script for folio-mods. Needs the module name as parameter 1
+
+
+# ================================= Copyright =================================
+# Version 0.1.0 (2020-06-16), Copyright (C) 2020
+# Author: Jo Drexl (johannes.drexl@lrz.de) for FOLIO
+# Coauthors: -
+
+#   This file is part of the LRZ FOLIO debian package
+
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+
+#    http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+#   On Debian systems, the full text of the Apache License version 2.0
+#   can be found in the file 
+#     `/usr/share/common-licenses/Apache-2.0'
+
+
+# ================================= Variables =================================
+
+# Path of the config directories
+FM_CONFPATH="/etc/folio"
+
+# Path to a file which contains pg_hba.conf style allow rules to import
+# This file is created by meta packages to ease setups and will only be written
+# to if it's already existing
+FM_PGHBACONF="/tmp/folio_pg_hba.conf"
+
+# Path to a file that indicates automated install - it also contains the prefix 
+# for users and databases
+FM_AUTOFILE="/tmp/folio_autosetup"
+# Path to a temporary server settings file for subsequent installs
+FM_PGSERVERFILE="/tmp/folio_pgserver"
+# Path to temporary file which signals to setup the database server in 
+# automated installs
+FM_PGSERVER_SETUP="/tmp/folio_pgsetup"
+
+
+# ================================= Functions =================================
+
+# Exit on cancel
+fm_cancel() {
+  # Takes no parameters
+  # Exits the script
+  
+  export NEWT_COLORS='root=,red'
+  whiptail --title "$FM_HEADLINE - Abort" --msgbox \
+    "Abort by user." 8 78
+  exit 0
+}
+
+# Ask for individual module config options
+fm_askconf() {
+  # Takes no parameters
+  # Returns 0
+  
+  # Database name
+  FM_PGDATABASE=""
+  while [ "$FM_PGDATABASE" = "" ]
+    do
+      if ! FM_PGDATABASE=$(whiptail --title "$FM_HEADLINE - PostgreSQL setup" \
+        --inputbox "Provide postgres database name (mind allowed characters):" \
+        8 78 $FM_PGDATABASE_DEFAULT 3>&1 1>&2 2>&3)
+        then
+          fm_cancel
+      fi
+      # Can't check this
+    done
+  # User
+  FM_PGUSER=""
+  while [ "$FM_PGUSER" = "" ]
+    do
+      if ! FM_PGUSER=$(whiptail --title "$FM_HEADLINE - PostgreSQL setup" \
+        --inputbox "Provide postgres username (mind allowed characters):" \
+        8 78 $FM_PGUSER_DEFAULT 3>&1 1>&2 2>&3)
+        then
+          fm_cancel
+      fi
+      # Can't check this
+    done
+  # Password
+  if ! FM_PGPASSWD=$(whiptail --title "$FM_HEADLINE - PostgreSQL setup" \
+    --passwordbox "Provide postgres password. Leaving it empty will result in a random string to be used." \
+    8 78 3>&1 1>&2 2>&3)
+    then
+      fm_cancel
+  fi
+}
+
+# Ask for the postgres server
+fm_askserver() {
+  # Takes no parameters
+  # Returns 0
+  
+  # Server
+  FM_PGSERVER=""
+  while [ "$FM_PGSERVER" = "" ]
+    do
+      if ! FM_PGSERVER=$(whiptail --title "$FM_HEADLINE - PostgreSQL setup" \
+        --inputbox "Provide postgres server address:" \
+        8 78 $FM_PGSERVER_DEFAULT 3>&1 1>&2 2>&3)
+        then
+          fm_cancel
+      fi
+      # Can't really check this
+    done
+  # Port
+  FM_PGPORT=""
+  while [ "$FM_PGPORT" = "" ]
+    do
+      # Ask user
+      if ! FM_PGPORT=$(whiptail --title "$FM_HEADLINE - PostgreSQL setup" \
+        --inputbox "Provide postgres server port:" \
+        8 78 $FM_PGPORT_DEFAULT 3>&1 1>&2 2>&3)
+        then
+          fm_cancel
+      fi
+      # Check if number is too big or NAN
+      if ! [[ "$FM_PGPORT" =~ ^[0-9]{1,5}$ ]]
+        then
+          FM_PGPORT=""
+      # Check if number is conflicting with ephemeral port range
+      elif [ "$FM_PGPORT" -ge "32768" ]
+        then
+          FM_PGPORT=""
+      fi
+    done
+}
+
+# Ask if server setup should be done, and if so, for the superuser credentials
+fm_askserversetup() {
+  # Takes no parameters
+  # Returns 0
+  
+  # Local variables
+  local SUCCESS=""
+
+  # General question if database is to be prepared
+  if whiptail --title "$FM_HEADLINE - PostgreSQL server setup" --yesno \
+    "Set up PostgreSQL server now?" 8 78
+    then
+      # Create the signal file for the database setup afterwards
+      touch "$FM_PGSERVER_SETUP"
+      # Check if we already have working superuser credentials for the server, 
+      # because if so, asking would be futile
+      if [ "$FM_PGSERVER" = "$FM_PGSERVER_DEFAULT" -a "$FM_PGPORT" = "$FM_PGPORT_DEFAULT" ]
+        then
+          if [ "$FM_PGSUNAME" != "" ]
+            then
+              return 0
+          fi
+      fi
+      # Ask for superuser credentials
+      while [ "$SUCCESS" = "" ]
+        do
+          # Superuser name
+          if ! FM_PGSUNAME=$(whiptail --title "$FM_HEADLINE - PostgreSQL server setup" \
+            --inputbox "Provide postgres superuser name:" \
+            8 78 3>&1 1>&2 2>&3)
+            then
+              fm_pgcancel
+              return 0
+          fi
+          # Superuser password
+          if ! PGPASSWORD=$(whiptail --title "$FM_HEADLINE - PostgreSQL server setup" \
+            --passwordbox "Provide postgres superuser password:" \
+            8 78 3>&1 1>&2 2>&3)
+            then
+              fm_pgcancel
+              return 0
+          fi
+          # Test credentials
+          # This query fails when not done by a superuser account, because it
+          # prints the connection limits from a superuser only table
+          export PGCONNECT_TIMEOUT=5
+          export PGPASSWORD
+          if psql -h "$FM_PGSERVER" -p "$FM_PGPORT" -U "$FM_PGSUNAME" -c 'SELECT rolconnlimit FROM pg_authid;' postgres > /dev/null 2>&1
+            then
+              SUCCESS="1"
+              return 0
+            else
+              export NEWT_COLORS='root=,red'
+              whiptail --title "$FM_HEADLINE - Failure!" --msgbox \
+                "Wrong superuser credentials or server not responding. Please try again." \
+                8 78
+              export NEWT_COLORS=""
+          fi
+        done
+    else
+      fm_pgcancel
+  fi
+  return 0
+}
+
+# Exit on cancel during PostgreSQL setup
+fm_pgcancel() {
+  # Takes no parameters
+  # Returns 0
+  
+  export NEWT_COLORS='root=,red'
+  whiptail --title "$FM_HEADLINE - Abort" --msgbox \
+    "Abort by user. Please setup your postgres server manually." 8 78
+  export NEWT_COLORS=""
+  return 0
+}
+
+# Setup the server with user and database
+fm_serversetup() {
+  # Takes no parameters
+  # Returns 0 on success
+  # Returns 1 on failure
+    
+  # Prepare the temporary commands file
+  touch "$FM_TEMP"
+  chown root:root "$FM_TEMP"
+  chmod 600 "$FM_TEMP"
+  # Secure the password for the user, so it can't leak on chatty PostgreSQL 
+  # server logs
+  # The password in PostgreSQL is stored like this:
+  # md5passwd = "md5"+md5(cleartxtpasswd+user);
+  # This won't work that easy with SCRAM-SHA-256, sadly
+  FM_MD5SUM=$(echo -n "$FM_PGPASSWD$FM_PGUSER" | md5sum)
+  echo -e "CREATE ROLE $FM_PGUSER WITH PASSWORD 'md5${FM_MD5SUM:0:-3}' LOGIN;\nCREATE DATABASE $FM_PGDATABASE WITH OWNER $FM_PGUSER;" > "$FM_TEMP"
+  # Set psql environment
+  export PGCONNECT_TIMEOUT=5
+  export PGPASSWORD
+  # Run psql to create user and database
+  echo "Connecting to '$FM_PGSERVER' to install user and database for $FM_PACKAGE..."
+  if psql -U "$FM_PGSUNAME" -h "$FM_PGSERVER" -f "$FM_TEMP" postgres > /dev/null 2>&1
+    then
+      echo "Done."
+      return 0
+    else
+      return 1
+  fi
+}
+
+
+# =============================== Prerequisites ===============================
+
+# We're setting the path variable anew because some systems have that wrong
+PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# Get script location
+OS_SCRIPT="${BASH_SOURCE[0]}"
+
+# Check if being root
+if [ "$(whoami)" != "root" ]
+  then
+    echo "$OS_SCRIPT has to be invocated as root!"
+    exit 1
+fi
+
+# Get parameters
+FM_PACKAGE="$1"
+
+# Check mandatory parameter
+if [ "$FM_PACKAGE" = "" ]
+  then
+    echo -e "\nNo package was given, no setup will be performed."
+    echo "Usage: setup_database <package>"
+    exit 1
+fi
+
+# Set variables
+FM_CONFIG="$FM_CONFPATH/$FM_PACKAGE/dbcredentials.env"
+FM_TEMP="/tmp/$FM_PACKAGE"
+
+# Check for automated install
+if [ -f "$FM_AUTOFILE" ]
+  then
+    FM_AUTOMATIC="1"
+    # Read user prefix for database server
+    FM_PGUSERPREFIX=$(head -n 1 "$FM_AUTOFILE")
+    # Read database prefix for database server
+    FM_PGDBPREFIX=$(tail -n 1 "$FM_AUTOFILE")
+fi
+
+# Check if there's already a config
+if [ -f "$FM_CONFIG" ]
+  then
+    # On automated installs use the config and don't change anything
+    if [ "$FM_AUTOMATIC" = "1" ]
+      then
+        echo "Config for $FM_PACKAGE found."
+        exit 0
+    fi
+    # Otherwise ask if it is to be overwritten
+    if ! whiptail --title "$FM_PACKAGE - Config" --defaultno \
+      --yesno "Overwrite existing config with new settings?" 8 78
+      then
+        echo -e "\nConfig found, skipping setup."
+        exit 0
+    fi
+fi
+
+# If there was a previous install script, there should be a file for all 
+# necessary server information - source it!
+if [ -f "$FM_PGSERVERFILE" ]
+  then
+    . "$FM_PGSERVERFILE"
+  else
+    # If we don't have that, let's try to be clever and check if there is
+    # already a folio module config file, which can tell us about the server
+    FM_MODCONF=$(ls -1 "$FM_CONFPATH"/mod_*/dbcredentials.env 2>/dev/null | head -n 1)
+    if [ "$FM_MODCONF" != "" ]
+      then
+        # Recheck if it's really a file there
+        if [ -f "$FM_MODCONF/dbcredentials.env" ]
+          then
+            # Source it and set the relevant variables as they would appear in 
+            # FM_PGSERVERFILE
+            . "$FM_MODCONF/dbcredentials.env"
+            FM_PGSERVER="$DB_HOST"
+            FM_PGPORT="$DB_PORT"
+        fi
+    fi
+fi
+
+# Set global defaults
+FM_PGSERVER_DEFAULT="${FM_PGSERVER:-localhost}"
+FM_PGPORT_DEFAULT="${FM_PGPORT:-5432}"
+
+
+# =================================== Main ====================================
+
+# Run questions if necessary
+if [ "$FM_AUTOMATIC" = "1" ]
+  then
+    # Read prefix for database user
+    # Set individual defaults
+    FM_HEADLINE="Folio modules"
+    FM_PGDATABASE="${FM_PGDBPREFIX}_${FM_PACKAGE:4}"
+    FM_PGUSER="${FM_PGUSERPREFIX}_${FM_PACKAGE:4}"
+    # Ask only if we don't have the necessary information yet
+    if [ ! -f "$FM_PGSERVERFILE" ]
+      then
+        fm_askserver
+        fm_askserversetup
+        # Create the file for all following scripts
+        touch "$FM_PGSERVERFILE"
+        chown root:root "$FM_PGSERVERFILE"
+        chmod 600 "$FM_PGSERVERFILE"
+        echo -e "FM_PGSERVER=\"$FM_PGSERVER\"
+FM_PGPORT=\"$FM_PGPORT\"
+FM_PGSUNAME=\"$FM_PGSUNAME\"
+PGPASSWORD=\"$PGPASSWORD\"" > "$FM_PGSERVERFILE"
+    fi
+  else
+    # Set individual defaults
+    FM_HEADLINE="$FM_PACKAGE"
+    FM_PGDATABASE_DEFAULT="folio_mod_${FM_PACKAGE:4}"
+    FM_PGUSER_DEFAULT="folio_mod_${FM_PACKAGE:4}"
+    # Ask everything
+    fm_askconf
+    fm_askserver
+    fm_askserversetup
+fi
+
+# Use a random string for an empty password
+if [ "$FM_PGPASSWD" = "" ]
+  then
+    FM_PGPASSWD=$(</dev/urandom tr -dc 'A-Za-z0-9!#$%&()*+,-./:;<=>?@[]^_`{|}~' | head -c 24)
+fi
+
+# Write the settings to the environment file, setting it secure first
+mkdir -p $(dirname "$FM_CONFIG")
+touch "$FM_CONFIG"
+chown root:folio-$FM_PACKAGE "$FM_CONFIG"
+chmod 640 "$FM_CONFIG"
+echo "DB_HOST=$FM_PGSERVER
+DB_PORT=$FM_PGPORT
+DB_DATABASE=$FM_PGDATABASE
+DB_USERNAME=$FM_PGUSER
+DB_PASSWORD=$FM_PGPASSWD" > "$FM_CONFIG"
+
+# Create pg_hba.conf entry
+if [ -f "$FM_PGHBACONF" ]
+  then
+    # Try to find out the correct external IP address for the server
+    FM_IP=$(ip a s | grep -oE "inet [0-9\.]+" | grep -v "inet 127" | head -n 1)
+    echo "host    $FM_PGDATABASE    $FM_PGUSER    ${FM_IP:5}/32    md5" >> "$FM_PGHBACONF"
+fi
+
+if [ -f "$FM_PGSERVER_SETUP" ]
+  then
+    # Do the setup
+    if ! fm_serversetup
+      then
+        export NEWT_COLORS='root=,red'
+        whiptail --title "$FM_PACKAGE - Server setup error" --msgbox \
+          "Database setup ran into an error! Please check manually." 8 78
+    fi
+fi
+
+# Delete the file that indicates the setup for the server
+if [ "$FM_AUTOMATIC" != "1" ]
+  then
+    rm -f "$FM_PGSERVER_SETUP"
+fi
+
+# Remove temp file
+rm -f "$FM_TEMP"
+
+exit 0
