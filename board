@@ -1,0 +1,211 @@
+#!/bin/bash
+
+# board
+# Takes care of registering the port to a dynamic file to avoid module
+# collisions.
+# Requires either 'on' or 'off' as parameters
+
+# The following environment variables have to be set:
+# JSON_FILE
+# MODULE
+# PORT
+
+
+# ================================= Copyright =================================
+# Version 0.0.1 (2020-07-08), Copyright (C) 2020
+# Author: Jo Drexl (johannes.drexl@lrz.de) for FOLIO
+# Coauthors: -
+
+#   This file is part of the LRZ FOLIO debian package
+
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+
+#    http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+#   On Debian systems, the full text of the Apache License version 2.0
+#   can be found in the file 
+#     `/usr/share/common-licenses/Apache-2.0'
+
+
+# ================================= Variables =================================
+
+# Registry file for modules and their used ports
+BO_REGFILE="/tmp/folio_registry"
+
+
+# ================================= Functions =================================
+
+# Delete module port entry in registry file
+bo_portdereg() {
+  # Returns 0 on success
+  # Returns 1 on failure
+  
+  # Delete the line which is expected to be there
+  sed -i "/^$BO_MODULE_ID $PORT$/d" "$BO_REGFILE"
+  # Check if the line is not there
+  if grep -E "^$BO_MODULE_ID $PORT$" "$BO_REGFILE" > /dev/null 2>&1
+    then
+      # If deregistration does not work, the admin definitely has to know
+      echo "FATAL: Could not deregister '$BO_MODULE_ID' port '$PORT' from the registry file '$BO_REGFILE'!"
+      return 1
+  fi
+  # If we arrive here, all is good now
+  return 0
+}
+
+# Register module and the port to file 
+bo_portreg() {
+  # Returns 0 on success
+  # Returns 1 on failure
+  
+  # Local variables
+  local CULPRIT
+  
+  # Registering the port
+  if ! echo "$BO_MODULE_ID $PORT" >> "$BO_REGFILE"
+    then
+      # If deregistration does not work, the admin definitely has to know
+      echo "FATAL: Could not register '$BO_MODULE_ID' port '$PORT' to the registry file '$BO_REGFILE'!"
+      return 1
+  fi
+  # Wait for a bit to counter race conditions
+  sleep 0.$RANDOM
+  # Conduct the check
+  if [ $(grep -cE ".* $PORT$" "$BO_REGFILE") != "1" ]
+    then
+      # Someone else has registered this port, find out the culprit and tell 
+      # the admin
+      CULPRIT=$(grep -E ".* $PORT$" "$BO_REGFILE" | grep -vE "^$BO_MODULE_ID $PORT$" | cut -d " " -f 1 | head -n 1)
+      echo "FATAL: $CULPRIT has just registered port '$PORT' configured for this service!"
+      # Try to undo our own registration, for this means the java process will
+      # not be able to start properly
+      bo_portdereg
+      # Return in shame
+      return 1
+  fi
+  # Everything went as it should
+  return 0
+}
+
+# Checks if the port has already been claimed
+bo_portcheck() {
+  # Returns 0 on port unused
+  # Returns 1 on failure or port already in use
+  
+  # Local variables
+  local CULPRIT
+  
+  # Check if the port is already registered
+  if ! grep -E ".* $PORT$" "$BO_REGFILE" > /dev/null 2>&1
+    then
+      # Port not registered, we're done
+      return 0
+  fi
+  # The registered port could be a not deleted artifact from a previous run, 
+  # check that
+  if grep -E "^$BO_MODULE_ID $PORT$" "$BO_REGFILE" > /dev/null 2>&1
+    then
+      # If deregistration does not work, the admin definitely has to know
+      echo "WARN: '$BO_MODULE_ID' port '$PORT' was already registered, removing registration..."
+      if bo_portdereg
+        then
+          # Deregistration was successful, clear environment
+          return 0
+        else
+          # Deregistration failed, return failure
+          return 1
+      fi
+  fi
+  # Obviously this port is used by another service
+  CULPRIT=$(grep -E ".* $PORT$" "$BO_REGFILE" | cut -d " " -f 1)
+  echo "FATAL: Port '$PORT' in use by '$CULPRIT'!"
+  return 1  
+}
+
+
+# =============================== Prerequisites ===============================
+
+# Fetch parameter
+if [ "$1" = "off" -o "$1" = "on" ]
+  then
+    BO_ACTION="$1"
+  else
+    echo "FATAL: Unrecognized action!"
+    exit 1
+fi
+
+# Check variables
+if [ "$JSON_FILE" = "" ]
+  then
+    echo "FATAL: No JSON_FILE specified!"
+    exit 1
+fi
+if [ "$MODULE" = "" ]
+  then
+    echo "FATAL: No MODULE specified!"
+    exit 1
+fi
+if [ "$PORT" = "" ]
+  then
+    echo "FATAL: No PORT specified!"
+    exit 1
+fi
+
+# Check for the JSON file
+if [ ! -f "$JSON_FILE" ]
+  then
+    echo "FATAL: JSON file missing!"
+    exit 1
+fi
+
+# Read the module id (mod_xy-$VERSION)
+CT_MODULE_ID=$(grep -Em 1 "\"id\":" "$JSON_FILE" | cut -d '"' -f 4 -s)
+# Check if it's invalid
+if ! echo "$CT_MODULE_ID" | grep -E "^[-a-z]+[\.0-9]+$" > /dev/null
+  then
+    echo "FATAL: Detected module ID was '$CT_MODULE_ID', can't work with that!"
+    exit 1
+fi
+# Check if the module name fits the JSON
+if [ "$CT_MODULE" != "$(echo "$CT_MODULE_ID" | grep -oE "[-a-z]+[a-z]")" ]
+  then
+    echo "FATAL: Module variable contains '$CT_MODULE', but JSON is for '$(echo "$CT_MODULE_ID" | grep -oE "[-a-z]+[a-z]")'."
+    exit 1
+fi
+
+
+# =================================== Main ====================================
+
+# Work through actions to be done
+case "$BO_ACTION" in
+  off)
+    # Check and register port
+    if ! bo_portdereg
+      then
+        # Messaging has already been taken care of
+        exit 1
+    fi
+    ;;
+  on)
+    # Check and register port
+    if bo_portcheck && bo_portreg
+      then
+        # Messaging has already been taken care of
+        exit 1
+    fi
+    ;;
+  *)
+    # Should not happen
+    echo "FATAL: Unrecognized action!"
+    ;;
+esac
+
+exit 0
