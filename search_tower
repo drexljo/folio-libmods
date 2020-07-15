@@ -1,0 +1,339 @@
+#!/bin/bash
+
+# search_tower
+# Tries to find okapi and write the environment file for the module; 
+# only really useful during package setup
+# Requires module name as parameter 1
+
+
+# ================================= Copyright =================================
+# Version 0.0.1 (2020-07-15), Copyright (C) 2020
+# Author: Jo Drexl (johannes.drexl@lrz.de) for FOLIO
+# Coauthors: -
+
+#   This file is part of the LRZ FOLIO debian package
+
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+
+#    http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+#   On Debian systems, the full text of the Apache License version 2.0
+#   can be found in the file 
+#     `/usr/share/common-licenses/Apache-2.0'
+
+
+# ================================= Variables =================================
+
+# Path of the config directories
+FM_CONFPATH="/etc/folio"
+
+# Name of the config file
+FM_CONFFILE="okapi_connect.env"
+
+# Path to a file that indicates automated install
+FM_AUTOFILE="/tmp/folio_autosetup"
+
+
+# ================================= Functions =================================
+
+# Tries to fetch okapi information from other modules
+fm_gatherokapi() {
+  # Requires either 'host' or 'port' as parameter 1
+  # Returns 0 on success
+  # Returns 1 on failure
+  # Echoes the result on success
+  
+  # Local variables
+  local CONFFILE
+  local ITEM="$1"
+  local RESULT
+  
+  # Check for correct invocation
+  if [ "$ITEM" = "host" ] 
+    then
+      ITEM="OKAPI_HOST"
+  elif [ "$ITEM" = "port" ]
+    then
+      ITEM="OKAPI_PORT"
+    else
+      # Error in invocation
+      return 1
+  fi
+  
+  # Search for EnvironmentFiles from other modules, using only the first one
+  if ! CONFFILE=$(ls -1 "$FM_CONFPATH"/mod_*/"$FM_CONFFILE" 2>/dev/null | head -n 1)
+    then
+      # No EnvironmentFiles, out of luck
+      return 1
+  fi
+  
+  # Check if it's really a file and read it out
+  if [ -f "$CONFFILE" ]
+    then
+      # This is done to avoid injection of unhandled variables in this script
+      RESULT=$(grep -oE "^$ITEM=(\")?[-a-z\.0-9]+(\")?$" "$CONFFILE" | cut -d "=" -f 2 -s | sed 's/"//g')
+  fi
+  
+  # Check result
+  if [ "$RESULT" = "" ]
+    then
+      # Could not work out the proper values
+      return 1
+  fi
+  
+  # All good, return
+  echo "$RESULT"
+  return 0
+}
+
+# Ask user for the proper value
+fm_okapiask() {
+  # Requires either 'host' or 'port' as parameter 1
+  # Returns 0 on success
+  # Returns 1 on failure
+  # Echoes the result on success
+
+  # Local variables
+  local ITEM="$1"
+  local RESULT
+  local TEXT
+
+  # Check for correct invocation
+  if [ "$ITEM" = "host" ] 
+    then
+      PATTERN="[-a-z\.0-9]+"
+      RESULT="$HOSTNAME"
+      TEXT="Please provide Okapi hostname"
+  elif [ "$ITEM" = "port" ]
+    then
+      PATTERN="[0-9]+"
+      RESULT="9130"
+      TEXT="Please provide Okapi port"
+    else
+      # Error in invocation
+      return 1
+  fi
+  
+  # Loop question to fetch wrong inputs
+  while true
+    do
+      # Ask, and don't take cancel for a valid answer
+      RESULT=$(whiptail --title "$FM_PACKAGE - Okapi setup" --inputbox \
+                "$TEXT:" 8 78 "$RESULT" 3>&1 1>&2 2>&3)
+      # Check if the user gave an empty string
+      if [ "$RESULT" = "" ]
+        then
+          # Yes, we don't report the error to the user, just silently assume a
+          # typo and show the now empty input mask again
+          continue
+      fi
+      # Check if the string matches the pattern
+      if echo "$RESULT" | grep -E "^$PATTERN$" > /dev/null 2>&1
+        then
+          # We're done with the 'host' part
+          if [ "$ITEM" != "port" ]
+            then
+              break
+          fi
+          # Check for ports to keep out of the well-known and dynamic ranges
+          if [ "$RESULT" -gt "1024" -a "$RESULT" -le "49151" ]
+            then
+              break
+          fi
+      fi
+      # The given value was horseshit, tell the user!
+      export NEWT_COLORS='root=,red'
+      whiptail --title "$FM_PACKAGE - Okapi config error" --msgbox \
+        "Pattern does not match the defined rules - Try again!" 8 78 3>&1 1>&2 2>&3
+      export NEWT_COLORS=""
+    done
+  # Give back the result and return
+  echo "$RESULT"
+  return 0
+}
+
+# Run the sequence of subfunctions to determine the proper value
+fm_runsequence() {
+  # Requires either 'host' or 'port' as parameter 1
+  # Returns 0 on success
+  # Returns 1 on failure
+  # Echoes the result on success
+
+  # Local variables
+  local ITEM="$1"
+  local RESULT
+  
+  # Check for correct invocation
+  if [ "$ITEM" != "host" -a "$ITEM" != "port" ]
+    then
+      # Error in invocation
+      return 1
+  fi
+
+  # First look for Okapi
+  if RESULT=$(fm_gatherokapi "$ITEM")
+    then
+      echo "$RESULT"
+      return 0
+  fi
+  # Fallback: Look for other configured modules and ask them about Okapi
+  if RESULT=$(fm_searchokapi "$ITEM")
+    then
+      echo "$RESULT"
+      return 0
+  fi
+  # Last resort: Ask the user
+  if RESULT=$(fm_okapiask "$ITEM")
+    then
+      echo "$RESULT"
+      return 0
+  fi
+  # We're doomed
+  return 1
+}
+
+# Searches for Okapi on the system, and reads its config file
+fm_searchokapi() {
+  # Requires either 'host' or 'port' as parameter 1
+  # Returns 0 on success
+  # Returns 1 on failure
+  # Echoes the result on success
+  
+  # Local variables
+  local ITEM="$1"
+  local RESULT
+  
+  # Check for correct invocation
+  if [ "$ITEM" != "host" -a "$ITEM" != "port" ]
+    then
+      # Error in invocation
+      return 1
+  fi
+  
+  # Search for Okapi config file on the system
+  if [ -f "$FM_CONFPATH/okapi/okapi.conf" ]
+    then
+      # This is done to avoid injection of unhandled variables in this script
+      RESULT=$(grep -oE "^$ITEM=(\")?[-a-z\.0-9]+(\")?$" $FM_CONFPATH/okapi/okapi.conf | cut -d "=" -f 2 -s | sed 's/"//g')
+  fi
+  
+  # Check result
+  if [ "$RESULT" = "" ]
+    then
+      # Could not work out the proper values
+      return 1
+  fi
+  
+  # All good, return
+  echo "$RESULT"
+  return 0
+}
+
+
+# =============================== Prerequisites ===============================
+
+# We're setting the path variable anew because some systems have that wrong
+PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# Get script location
+OS_SCRIPT="${BASH_SOURCE[0]}"
+
+# Check if being root
+if [ "$(whoami)" != "root" ]
+  then
+    echo "$OS_SCRIPT has to be invocated as root!"
+    exit 1
+fi
+
+# Get parameters
+FM_PACKAGE="$1"
+
+# Check mandatory parameter
+if [ "$FM_PACKAGE" = "" ]
+  then
+    echo -e "\nNo package was given, no setup will be performed."
+    echo "Usage: $OS_SCRIPT <package>"
+    exit 1
+fi
+
+# Check for automated install
+if [ -f "$FM_AUTOFILE" ]
+  then
+    FM_AUTOMATIC="1"
+fi
+
+# This is for a full or core setup, where search_tower is invocated as
+# part of the metapackage install routine and does the hard work, whether all
+# subsequent packages just link to the mutual config file
+if [ "$FM_PACKAGE" = "folio-full" -o "$FM_PACKAGE" = "folio-core" ]
+  then
+    # Set variables
+    FM_CONFIG="$FM_CONFPATH/$FM_CONFFILE"
+    FM_AUTOMATIC="1"
+  else
+    # Set variables
+    FM_CONFIG="$FM_CONFPATH/$FM_PACKAGE/$FM_CONFFILE"
+fi
+
+# Check if there's already a config
+if [ -f "$FM_CONFIG" -o -L "$FM_CONFIG" ]
+  then
+    # On automated installs use the config and don't change anything
+    if [ "$FM_AUTOMATIC" = "1" ]
+      then
+        echo "Config for $FM_PACKAGE found: $FM_CONFIG"
+        exit 0
+    fi
+    # Otherwise ask if it is to be overwritten
+    if ! whiptail --title "$FM_PACKAGE - Config" --defaultno \
+      --yesno "Overwrite existing config with new settings?" 8 78
+      then
+        echo -e "\nConfig found, skipping setup."
+        exit 0
+    fi
+    # Moving away the config, since it is to be overwritten
+    mv "$FM_CONFIG" "$FM_CONFIG.old"
+fi
+
+# Make sure the path for the config is existing
+mkdir -p "$(dirname "$FM_CONFIG")"
+
+
+# =================================== Main ====================================
+
+# If there's a commonly used file in $FM_CONFPATH, we just link there
+# and are done
+if [ -f "$FM_CONFPATH/$FM_CONFFILE" ]
+  then
+    ln -s "$FM_CONFPATH/$FM_CONFFILE" "$FM_CONFIG"
+    exit 0
+fi
+
+# Get the host information
+if ! FM_OKAPI_HOST=$(fm_runsequence "host")
+  then
+    # We can't work without Okapi!
+    exit 1
+fi
+# Get the port information
+if ! FM_OKAPI_PORT=$(fm_runsequence "port")
+  then
+    # We can't work without Okapi!
+    exit 1
+fi
+  
+# Write header and create file
+echo "# This file was automatically created during install of '$FM_PACKAGE'" > "$FM_CONFIG"
+chmod 644 "$FM_CONFIG"
+chown root:root "$FM_CONFIG"
+echo -e "OKAPI_HOST=\"$FM_OKAPI_HOST\"\nOKAPI_PORT=\"$FM_OKAPI_PORT\"" >> "$FM_CONFIG"
+
+exit 0

@@ -5,7 +5,7 @@
 
 
 # ================================= Copyright =================================
-# Version 0.1.0 (2020-06-16), Copyright (C) 2020
+# Version 0.1.1 (2020-07-14), Copyright (C) 2020
 # Author: Jo Drexl (johannes.drexl@lrz.de) for FOLIO
 # Coauthors: -
 
@@ -32,6 +32,9 @@
 
 # Path of the config directories
 FM_CONFPATH="/etc/folio"
+
+# Name of the config file
+FM_CONFFILE="dbcredentials.env"
 
 # Path to a file which contains pg_hba.conf style allow rules to import
 # This file is created by meta packages to ease setups and will only be written
@@ -275,8 +278,8 @@ if [ "$FM_PACKAGE" = "" ]
 fi
 
 # Set variables
-FM_CONFIG="$FM_CONFPATH/$FM_PACKAGE/dbcredentials.env"
-FM_TEMP="/tmp/$FM_PACKAGE"
+FM_CONFIG="$FM_CONFPATH/$FM_PACKAGE/$FM_CONFFILE"
+FM_TEMP="/tmp/setup_database-$FM_PACKAGE-$$"
 
 # Check for automated install
 if [ -f "$FM_AUTOFILE" ]
@@ -314,15 +317,15 @@ if [ -f "$FM_PGSERVERFILE" ]
   else
     # If we don't have that, let's try to be clever and check if there is
     # already a folio module config file, which can tell us about the server
-    FM_MODCONF=$(ls -1 "$FM_CONFPATH"/mod_*/dbcredentials.env 2>/dev/null | head -n 1)
+    FM_MODCONF=$(ls -1 "$FM_CONFPATH"/mod_*/"$FM_CONFFILE" 2>/dev/null | head -n 1)
     if [ "$FM_MODCONF" != "" ]
       then
         # Recheck if it's really a file there
-        if [ -f "$FM_MODCONF/dbcredentials.env" ]
+        if [ -f "$FM_MODCONF" ]
           then
             # Source it and set the relevant variables as they would appear in 
             # FM_PGSERVERFILE
-            . "$FM_MODCONF/dbcredentials.env"
+            . "$FM_MODCONF"
             FM_PGSERVER="$DB_HOST"
             FM_PGPORT="$DB_PORT"
         fi
@@ -357,6 +360,9 @@ if [ "$FM_AUTOMATIC" = "1" ]
 FM_PGPORT=\"$FM_PGPORT\"
 FM_PGSUNAME=\"$FM_PGSUNAME\"
 PGPASSWORD=\"$PGPASSWORD\"" > "$FM_PGSERVERFILE"
+        # Timebomb the file, since we don't want superuser credentials lying
+        # around on a system, even with secure permissions
+        sleep 300 && rm -f "$FM_PGSERVERFILE" &
     fi
   else
     # Set individual defaults

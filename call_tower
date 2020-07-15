@@ -203,7 +203,7 @@ ct_runway() {
   while read TENANT
     do
       # Ignore lines with comments or spaces
-      if echo "$LINE" | grep -E "(\s+)?(#.*)?" > /dev/null 2>&1
+      if echo "$LINE" | grep -E "^(\s+)?(#.*)?$" > /dev/null 2>&1
         then
           continue
       fi

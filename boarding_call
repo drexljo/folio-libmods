@@ -1,0 +1,295 @@
+#!/bin/bash
+
+# boarding_call
+# Tries to find tenants and write them to the config file; 
+# only really useful during package setup
+# Requires module name as parameter 1
+
+
+# ================================= Copyright =================================
+# Version 0.0.1 (2020-07-14), Copyright (C) 2020
+# Author: Jo Drexl (johannes.drexl@lrz.de) for FOLIO
+# Coauthors: -
+
+#   This file is part of the LRZ FOLIO debian package
+
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+
+#    http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+#   On Debian systems, the full text of the Apache License version 2.0
+#   can be found in the file 
+#     `/usr/share/common-licenses/Apache-2.0'
+
+
+# ================================= Variables =================================
+
+# Path of the config directories
+FM_CONFPATH="/etc/folio"
+
+# Name of the config file
+FM_CONFFILE="tenants"
+
+# Path to a file that indicates automated install
+FM_AUTOFILE="/tmp/folio_autosetup"
+
+
+# ================================= Functions =================================
+
+# Gathers tenants from all installed packages
+fm_gathertenants() {
+  # Returns 0 on success
+  # Returns 2 on empty list
+  # Echoes a sorted list of all found tenants
+  
+  # Local variables
+  local REGULARS
+  local TENANTFILES
+  local TENANTS
+  
+  # Try to find other tenant files
+  if ! TENANTFILES=$(ls -1 "$FM_CONFPATH"/mod_*/"$FM_CONFFILE" 2>/dev/null)
+    then
+      # No tenant files, no tenants, can do no better
+      return 2
+  fi
+  
+  # Import all tenant files
+  while read FILE
+    do
+      # Check if it's really a file (or a symlink at least)
+      if [ ! -f "$FILE" -a ! -L "$FILE" ]
+        then
+          # Can't read stuff other than a file
+          continue
+      fi
+      # This will include at least one empty line, apart from comments etc.
+      REGULARS="$(echo -e "$REGULARS\n$(<"$FILE")")"
+    done <<<"$TENANTFILES"
+  
+  # Will do sorting and returns
+  fm_tenantsort "$REGULARS"
+  return "$?"
+}
+
+# Asks the user for tenants
+fm_tenantask() {
+  # Returns 0 on success
+  # Returns 1 on failure
+  # Echoes a single tenant or nothing, if the user is done
+
+  # Local variables
+  local REPEAT="1"
+  local TENANT
+  local TEXT="$1"
+
+  # Internal check for correct invocation
+  if [ "$TEXT" = "" ]
+    then
+      # No text provided
+      return 1
+  fi
+  
+  # Loop the question, to fetch wrong inputs
+  while [ "$REPEAT" = "1" ]
+    do
+      if ! TENANT=$(whiptail --title "$FM_PACKAGE - Tenants setup" \
+                      --inputbox "$TEXT:" 8 78 3>&1 1>&2 2>&3)
+        then
+          # Return without echo
+          return 0
+      fi
+      # Check if the user gave an empty string
+      if [ "$TENANT" != "" ]
+        then
+          REPEAT="0"
+      fi
+    done
+  # Give back the tenant and return
+  echo "$TENANT"
+  return 0
+}
+
+# Manages user interaction
+fm_tenantquiz() {
+  # Returns 0 on success
+  # Returns 2 on empty list
+  # Echoes a sorted list of all configured tenants
+
+  # Local variables
+  local ITERATION="1"
+  local TENANT
+  local TENANTS
+  local TEXT="Provide a tenant for your installation"
+  
+  # Roll through the iterations
+  while [ "$ITERATION" != "0" ]
+    do
+      # Set text for second and following iterations
+      if [ "$ITERATION" = "2" ]
+        then
+          TEXT="Provide another tenant (or press cancel)"
+      fi
+      # Ask the user
+      TENANT="$(fm_tenantask "$TEXT")"
+      # Do not allow empty string in the first iteration
+      if [ "$ITERATION" = "1" -a "$TENANT" = "" ]
+        then
+          export NEWT_COLORS='root=,red'
+          whiptail --title "$FM_PACKAGE - Tenant error" --msgbox \
+            "Need at least one tenant to continue!" 8 78 3>&1 1>&2 2>&3
+          export NEWT_COLORS=""
+          continue
+      fi
+      # An empty string here means the user is finished with adding tenants
+      if [ "$TENANT" = "" ]
+        then
+          ITERATION="0"
+          break
+      fi
+      # All other strings are just added to the list of tenants
+      TENANTS="$(echo -e "$TENANTS\n$TENANT")"
+      ITERATION=$(( $ITERATION + 1 ))
+    done
+  
+  # Will do sorting and returns
+  fm_tenantsort "$TENANTS"
+  return "$?"
+}
+
+# Manages user interaction
+fm_tenantsort() {
+  # Requires a tenant list as parameter 1
+  # Returns 0 on success
+  # Returns 2 on empty list
+  # Echoes a sorted list of all configured tenants
+
+  # Local variables
+  local TENANTS="$1"
+  
+  # Create a unique, sorted set without empty lines and comments
+  TENANTS="$(echo "$TENANTS" | sort -u | grep -vE "^(\s+)?(#.*)?$")"
+  if [ "$TENANTS" = "" ]
+    then
+      # No tenants left
+      return 2
+  fi
+  
+  # Echo the tenants
+  echo "$TENANTS"
+  return 0
+}
+  
+
+# =============================== Prerequisites ===============================
+
+# We're setting the path variable anew because some systems have that wrong
+PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# Get script location
+OS_SCRIPT="${BASH_SOURCE[0]}"
+
+# Check if being root
+if [ "$(whoami)" != "root" ]
+  then
+    echo "$OS_SCRIPT has to be invocated as root!"
+    exit 1
+fi
+
+# Get parameters
+FM_PACKAGE="$1"
+
+# Check mandatory parameter
+if [ "$FM_PACKAGE" = "" ]
+  then
+    echo -e "\nNo package was given, no setup will be performed."
+    echo "Usage: $OS_SCRIPT <package>"
+    exit 1
+fi
+
+# Check for automated install
+if [ -f "$FM_AUTOFILE" ]
+  then
+    FM_AUTOMATIC="1"
+fi
+
+# This is for a full or core setup, where boarding_call is invocated as
+# part of the metapackage install routine and does the hard work, whether all
+# subsequent packages just link to the mutual config file
+if [ "$FM_PACKAGE" = "folio-full" -o "$FM_PACKAGE" = "folio-core" ]
+  then
+    # Set variables
+    FM_CONFIG="$FM_CONFPATH/$FM_CONFFILE"
+    FM_AUTOMATIC="1"
+  else
+    # Set variables
+    FM_CONFIG="$FM_CONFPATH/$FM_PACKAGE/$FM_CONFFILE"
+fi
+
+# Check if there's already a config
+if [ -f "$FM_CONFIG" -o -L "$FM_CONFIG" ]
+  then
+    # On automated installs use the config and don't change anything
+    if [ "$FM_AUTOMATIC" = "1" ]
+      then
+        echo "Config for $FM_PACKAGE found: $FM_CONFIG"
+        exit 0
+    fi
+    # Otherwise ask if it is to be overwritten
+    if ! whiptail --title "$FM_PACKAGE - Config" --defaultno \
+      --yesno "Overwrite existing config with new settings?" 8 78
+      then
+        echo -e "\nConfig found, skipping setup."
+        exit 0
+    fi
+    # Moving away the config, since it is to be overwritten
+    mv "$FM_CONFIG" "$FM_CONFIG.old"
+fi
+
+# Make sure the path for the config is existing
+mkdir -p "$(dirname "$FM_CONFIG")"
+
+
+# =================================== Main ====================================
+
+# If there's a commonly used file in $FM_CONFPATH, we just link there
+# and are done
+if [ -f "$FM_CONFPATH/$FM_CONFFILE" ]
+  then
+    ln -s "$FM_CONFPATH/$FM_CONFFILE" "$FM_CONFIG"
+    exit 0
+fi
+
+# Write header and create file
+echo "# This file was automatically created during install of '$FM_PACKAGE'" > "$FM_CONFIG"
+chmod 644 "$FM_CONFIG"
+chown root:root "$FM_CONFIG"
+
+# Use gathered information to finish the setup straight in the beginning
+# This is mostly done when manually installing additional packages and no
+# mutual config is found
+if ! FM_TEMP=$(fm_gathertenants)
+  then
+    if ! FM_TEMP=$(fm_tenantquiz)
+      then
+        echo -e "Could not gather the required tenant information! Please edit\n'$FM_CONFIG'\nmanually."
+        # We exit here on 0, because there is a file created which is empty and
+        # thus does not lead to bailouts of the scripts involved instarting
+        # the services
+        exit 0
+    fi
+fi
+
+# Write the contents of FM_TEMP to config
+echo "$FM_TEMP" >> "$FM_CONFIG"
+
+# This movie is over
+exit 0
