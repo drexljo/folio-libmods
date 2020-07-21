@@ -15,7 +15,7 @@
 
 
 # ================================= Copyright =================================
-# Version 0.0.2 (2020-07-17), Copyright (C) 2020
+# Version 0.0.2 (2020-07-21), Copyright (C) 2020
 # Author: Jo Drexl (johannes.drexl@lrz.de) for FOLIO
 # Coauthors: -
 
@@ -40,6 +40,10 @@
 
 # ================================= Variables =================================
 
+# Optional file to specify multiple okapi hosts and ports
+# If there are files with -$PORT in the end, we will find and apply them
+CT_OKAPIFILE="/etc/folio/$MODULE/okapi_multi"
+
 # Tenantfile
 # If there are tenant files with -$PORT in the end, we will find and apply them
 CT_TENANTFILE="/etc/folio/$MODULE/tenants"
@@ -55,9 +59,6 @@ CT_OKAPI_REGFILE=".okapi"
 # port will be added to the end, to enable different tenants for each module
 # invocation
 CT_TENANT_REGFILE=".tenants"
-
-# Optional file to specify multiple okapi hosts and ports
-CT_OKAPIFILE="/etc/folio/$MODULE/okapi_multi"
 
 
 # ================================= Functions =================================
