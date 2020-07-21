@@ -77,7 +77,7 @@ ct_broadcast() {
   local OKAPI
   
   # Check for correct action
-  if [ "$ACTION" = "signoff" -o "$ACTION" = "signon" ]
+  if [ "$ACTION" != "signoff" -a "$ACTION" != "signon" ]
     then
       echo "FATAL: Could not recognize action for ct_broadcast!"
       return 1
@@ -537,15 +537,15 @@ if ! echo "$CT_MODULE_ID" | grep -E "^[-a-z]+[\.0-9]+$" > /dev/null
     exit 1
 fi
 # Check if the module name fits the JSON
-if [ "$CT_MODULE" != "$(echo "$CT_MODULE_ID" | grep -oE "[-a-z]+[a-z]")" ]
+if [ "$MODULE" != "$(echo "$CT_MODULE_ID" | grep -oE "[-a-z]+[a-z]")" ]
   then
-    echo "FATAL: Module variable contains '$CT_MODULE', but JSON is for '$(echo "$CT_MODULE_ID" | grep -oE "[-a-z]+[a-z]")'."
+    echo "FATAL: Module variable contains '$MODULE', but JSON is for '$(echo "$CT_MODULE_ID" | grep -oE "[-a-z]+[a-z]")'."
     exit 1
 fi
 # Get interface name
 CT_INTERFACE=$(grep -Em 1 -A 3 "\"provides\":" "$JSON_FILE" | grep -Em 1 "\"id\":" | cut -d '"' -f 4 -s)
 # Check if it's invalid
-if ! echo "$CT_INTERFACE" | grep -E "^[-a-z]+[\.0-9]+$" > /dev/null
+if ! echo "$CT_INTERFACE" | grep -E "^[-a-z0-9]+$" > /dev/null
   then
     echo "FATAL: Detected interface was '$CT_INTERFACE', can't work with that!"
     exit 1
@@ -556,12 +556,17 @@ CT_OKAPI_REGFILE="$HOME/$CT_OKAPI_REGFILE-$PORT"
 CT_TENANT_REGFILE="$HOME/$CT_TENANT_REGFILE-$PORT"
 
 # Set temp files for communication
-CT_TMPJSON_HELLO="/tmp/$CT_MODULE-$PORT-hello.json"
-CT_TMPJSON_TENANTS="/tmp/$CT_MODULE-$PORT-tenants.json"
+CT_TMPJSON_HELLO="/tmp/$MODULE-$PORT-hello.json"
+CT_TMPJSON_TENANTS="/tmp/$MODULE-$PORT-tenants.json"
 
 # Prepare environment to work with
 case "$CT_ACTION" in
   signoff)
+    # Check if there's anything to do at all
+    if [ ! -f "$CT_OKAPI_REGFILE" ]
+      then
+        exit 0
+    fi
     # Prepare the okapi list
     CT_OKAPI=$(<"$CT_OKAPI_REGFILE")
     ;;
@@ -575,6 +580,9 @@ case "$CT_ACTION" in
       then
         CT_OKAPI=$(echo -e "$CT_OKAPI\n$(<"$CT_OKAPIFILE")")
     fi
+    # Touch registry files
+    touch "$CT_OKAPI_REGFILE"
+    touch "$CT_TENANT_REGFILE"
     # Prepare json files
     if ! ct_jsonhello && ct_jsontenant
       then
@@ -596,6 +604,16 @@ if ct_broadcast "$CT_ACTION"
     RETURN="1"
 fi
 
+# Remove empty registry files
+if [ $(wc -l < "$CT_OKAPI_REGFILE") = "0" ]
+  then
+    rm -f "$CT_OKAPI_REGFILE"
+fi
+if [ $(wc -l < "$CT_TENANT_REGFILE") = "0" ]
+  then
+    rm -f "$CT_TENANT_REGFILE"
+fi
+    
 # Remove temp files (no problem if not existing)
 rm -f "$CT_TMPJSON_HELLO"
 rm -f "$CT_TMPJSON_TENANTS"

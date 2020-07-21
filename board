@@ -12,7 +12,7 @@
 
 
 # ================================= Copyright =================================
-# Version 0.0.1 (2020-07-08), Copyright (C) 2020
+# Version 0.0.1 (2020-07-21), Copyright (C) 2020
 # Author: Jo Drexl (johannes.drexl@lrz.de) for FOLIO
 # Coauthors: -
 
@@ -175,9 +175,9 @@ if ! echo "$CT_MODULE_ID" | grep -E "^[-a-z]+[\.0-9]+$" > /dev/null
     exit 1
 fi
 # Check if the module name fits the JSON
-if [ "$CT_MODULE" != "$(echo "$CT_MODULE_ID" | grep -oE "[-a-z]+[a-z]")" ]
+if [ "$MODULE" != "$(echo "$CT_MODULE_ID" | grep -oE "[-a-z]+[a-z]")" ]
   then
-    echo "FATAL: Module variable contains '$CT_MODULE', but JSON is for '$(echo "$CT_MODULE_ID" | grep -oE "[-a-z]+[a-z]")'."
+    echo "FATAL: Module variable contains '$MODULE', but JSON is for '$(echo "$CT_MODULE_ID" | grep -oE "[-a-z]+[a-z]")'."
     exit 1
 fi
 
