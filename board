@@ -12,7 +12,7 @@
 
 
 # ================================= Copyright =================================
-# Version 0.0.1 (2020-07-21), Copyright (C) 2020
+# Version 0.0.2 (2020-07-22), Copyright (C) 2020
 # Author: Jo Drexl (johannes.drexl@lrz.de) for FOLIO
 # Coauthors: -
 
@@ -38,7 +38,7 @@
 # ================================= Variables =================================
 
 # Registry file for modules and their used ports
-BO_REGFILE="/tmp/folio_registry"
+BO_REGFILE="/dev/shm/.folio_registry"
 
 
 # ================================= Functions =================================
@@ -167,17 +167,17 @@ if [ ! -f "$JSON_FILE" ]
 fi
 
 # Read the module id (mod_xy-$VERSION)
-CT_MODULE_ID=$(grep -Em 1 "\"id\":" "$JSON_FILE" | cut -d '"' -f 4 -s)
+BO_MODULE_ID=$(grep -Em 1 "\"id\":" "$JSON_FILE" | cut -d '"' -f 4 -s)
 # Check if it's invalid
-if ! echo "$CT_MODULE_ID" | grep -E "^[-a-z]+[\.0-9]+$" > /dev/null
+if ! echo "$BO_MODULE_ID" | grep -E "^[-a-z]+[\.0-9]+$" > /dev/null
   then
-    echo "FATAL: Detected module ID was '$CT_MODULE_ID', can't work with that!"
+    echo "FATAL: Detected module ID was '$BO_MODULE_ID', can't work with that!"
     exit 1
 fi
 # Check if the module name fits the JSON
-if [ "$MODULE" != "$(echo "$CT_MODULE_ID" | grep -oE "[-a-z]+[a-z]")" ]
+if [ "$MODULE" != "$(echo "$BO_MODULE_ID" | grep -oE "[-a-z]+[a-z]")" ]
   then
-    echo "FATAL: Module variable contains '$MODULE', but JSON is for '$(echo "$CT_MODULE_ID" | grep -oE "[-a-z]+[a-z]")'."
+    echo "FATAL: Module variable contains '$MODULE', but JSON is for '$(echo "$BO_MODULE_ID" | grep -oE "[-a-z]+[a-z]")'."
     exit 1
 fi
 
@@ -196,7 +196,12 @@ case "$BO_ACTION" in
     ;;
   on)
     # Check and register port
-    if bo_portcheck && bo_portreg
+    if ! bo_portcheck
+      then
+        # Messaging has already been taken care of
+        exit 1
+    fi
+    if ! bo_portreg
       then
         # Messaging has already been taken care of
         exit 1
