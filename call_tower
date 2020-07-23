@@ -15,7 +15,7 @@
 
 
 # ================================= Copyright =================================
-# Version 0.0.2 (2020-07-21), Copyright (C) 2020
+# Version 0.0.3 (2020-07-23), Copyright (C) 2020
 # Author: Jo Drexl (johannes.drexl@lrz.de) for FOLIO
 # Coauthors: -
 
@@ -201,6 +201,12 @@ ct_chores() {
       fi
       ;;
     signon)
+      # Post the module descriptor to okapi
+      if ! ct_register "$OKAPI"
+        then
+          # Messaging has already been taken care of
+          return 1
+      fi
       # Call okapi to enable module
       if ! ct_hello "$OKAPI"
         then
@@ -333,6 +339,41 @@ ct_liftoff() {
       return 0
     else
       echo -e "WARN: Okapi answered with unknown message:\n$RETURN"
+      return 1
+  fi
+}
+
+# Register the module descriptor to Okapi
+ct_register() {
+  # Expects the okapi to connect to as parameter 1
+  # Returns 0 on success
+  # Returns 1 on failure
+  
+  # Local variables
+  local OKAPI="$1"
+  local RETURN
+  
+  # Check for Okapi to be set
+  if [ "$OKAPI" = "" ]
+    then
+      echo "FATAL: Okapi was not provided for ct_register."
+      return 1
+  fi
+  
+  # Register module descriptor
+  if ! RETURN=$(curl -D - -s -w '\n' -X POST -H "Content-type: application/json" \
+    -d @"$JSON_FILE" http://$OKAPI/_/proxy/modules)
+    then
+      echo "FATAL: Could not register module '$CT_MODULE_ID' to Okapi!"
+      return 1
+  fi
+  # Interpret return message
+  if echo -e "$RETURN" | grep "HTTP/1.1 201 Created" > /dev/null 2>&1
+    then
+      echo "INFO: ModuleDescriptor for '$CT_MODULE_ID'registered with Okapi."
+      return 0
+    else
+      echo -e "ERROR: Okapi answered with unknown message:\n$RETURN"
       return 1
   fi
 }
