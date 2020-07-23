@@ -96,7 +96,7 @@ ct_broadcast() {
       if ! echo "$OKAPI" | grep -E "^[-a-z\.0-9]+:[0-9]{2,5}$" > /dev/null 2>&1
         then
           echo "ERROR: Configured okapi instance '$OKAPI' makes no sense to me."
-          ERRORS=$(( $ERRORS + 1 ))
+          ERRORS="$(( $ERRORS + 1 ))"
           # No need to break the whole endeavour, just continue
           continue
       fi
@@ -105,12 +105,12 @@ ct_broadcast() {
       if ! ct_chores "$OKAPI" "$ACTION"
         then
           echo "ERROR: Could not deal successfully with '$OKAPI'!"
-          ERRORS=$(( $ERRORS + 1 ))
+          ERRORS="$(( $ERRORS + 1 ))"
           continue
       fi
       
       # Count iterations
-      ITERATION=$(( $ITERATION + 1 ))
+      ITERATION="$(( $ITERATION + 1 ))"
     done 9<<< "$(echo "$CT_OKAPI")"
   
   # Report
@@ -140,7 +140,7 @@ ct_bye() {
   fi
   
   # Delete module instance from Okapi
-  if ! RETURN=$(curl -D - -s -w '\n' -X DELETE http://$OKAPI/_/deployment/modules/$CT_MODULE_ID/$HOST-$PORT)
+  if ! RETURN="$(curl -D - -s -w '\n' -X DELETE http://$OKAPI/_/deployment/modules/$CT_MODULE_ID/$HOST-$PORT)"
     then
       echo "FATAL: Could not deregister module '$CT_MODULE_ID' from Okapi!"
       return 1
@@ -246,8 +246,8 @@ ct_hello() {
   fi
   
   # Register module itself
-  if ! RETURN=$(curl -D - -s -w '\n' -X POST -H "Content-type: application/json" \
-    -d @"$CT_TMPJSON_HELLO" http://$OKAPI/_/discovery/modules)
+  if ! RETURN="$(curl -D - -s -w '\n' -X POST -H "Content-type: application/json" \
+    -d @"$CT_TMPJSON_HELLO" http://$OKAPI/_/discovery/modules)"
     then
       echo "FATAL: Could not register module '$CT_MODULE_ID' to Okapi!"
       return 1
@@ -324,8 +324,8 @@ ct_liftoff() {
   fi
   
   # Register module for tenant
-  if ! RETURN=$(curl -D - -s -w '\n' -X POST -H "Content-type: application/json" \
-    -d @"$CT_TMPJSON_TENANTS" http://$OKAPI/_/proxy/tenants/$TENANT/modules)
+  if ! RETURN="$(curl -D - -s -w '\n' -X POST -H "Content-type: application/json" \
+    -d @"$CT_TMPJSON_TENANTS" http://$OKAPI/_/proxy/tenants/$TENANT/modules)"
     then
       echo "ERROR: Could not bind module '$CT_MODULE_ID' to tenant '$TENANT'!"
       return 1
@@ -362,9 +362,9 @@ ct_register() {
   fi
   
   # Register module descriptor
-  if ! RETURN=$(curl -D - -s -w '\n' -X POST -H "Content-type: application/json" \
-    -d @"$JSON_FILE" http://$OKAPI/_/proxy/modules)
-    then
+  if ! RETURN="$(curl -D - -s -w '\n' -X POST -H "Content-type: application/json" \
+    -d @"$JSON_FILE" http://$OKAPI/_/proxy/modules)"
+     then
       echo "FATAL: Could not register module '$CT_MODULE_ID' to Okapi!"
       return 1
   fi
@@ -474,7 +474,7 @@ ct_touchdown() {
       return 0
   fi
   # Deregister module for tenant
-  if ! RETURN=$(curl -D - -s -w '\n' -X DELETE http://$OKAPI/_/proxy/tenants/$TENANT/modules/$CT_MODULE_ID)
+  if ! RETURN="$(curl -D - -s -w '\n' -X DELETE http://$OKAPI/_/proxy/tenants/$TENANT/modules/$CT_MODULE_ID)"
     then
       echo "ERROR: Could not unbind module '$CT_MODULE_ID' from tenant '$TENANT'!"
       return 1
@@ -513,7 +513,7 @@ if [ "$HOME" = "" ]
 fi
 if [ "$HOST" = "" ]
   then
-    HOST=$(hostname --fqdn)
+    HOST="$(hostname --fqdn)"
 fi
 if [ "$JSON_FILE" = "" ]
   then
@@ -571,7 +571,7 @@ if [ -f "$CT_TENANTFILE-$PORT" -o -L "$CT_TENANTFILE-$PORT" ]
 fi
 
 # Read the module id (mod_xy-$VERSION)
-CT_MODULE_ID=$(grep -Em 1 "\"id\":" "$JSON_FILE" | cut -d '"' -f 4 -s)
+CT_MODULE_ID="$(grep -Em 1 "\"id\":" "$JSON_FILE" | cut -d '"' -f 4 -s)"
 # Check if it's invalid
 if ! echo "$CT_MODULE_ID" | grep -E "^[-a-z]+[\.0-9]+$" > /dev/null
   then
@@ -585,7 +585,7 @@ if [ "$MODULE" != "$(echo "$CT_MODULE_ID" | grep -oE "[-a-z]+[a-z]")" ]
     exit 1
 fi
 # Get interface name
-CT_INTERFACE=$(grep -Em 1 -A 3 "\"provides\":" "$JSON_FILE" | grep -Em 1 "\"id\":" | cut -d '"' -f 4 -s)
+CT_INTERFACE="$(grep -Em 1 -A 3 "\"provides\":" "$JSON_FILE" | grep -Em 1 "\"id\":" | cut -d '"' -f 4 -s)"
 # Check if it's invalid
 if ! echo "$CT_INTERFACE" | grep -E "^[-a-z0-9]+$" > /dev/null
   then
@@ -610,7 +610,8 @@ case "$CT_ACTION" in
         exit 0
     fi
     # Prepare the okapi list
-    CT_OKAPI=$(<"$CT_OKAPI_REGFILE")
+    CT_OKAPI="$(<"$CT_OKAPI_REGFILE")"
+    # This is just to circumvent a bug in syntax interpretation of gedit"
     ;;
   signon)
     # Prepare the okapi list
@@ -620,7 +621,7 @@ case "$CT_ACTION" in
     fi
     if [ -f "$CT_OKAPIFILE" -o -L "$CT_OKAPIFILE" ]
       then
-        CT_OKAPI=$(echo -e "$CT_OKAPI\n$(<"$CT_OKAPIFILE")")
+        CT_OKAPI="$(echo -e "$CT_OKAPI\n$(<"$CT_OKAPIFILE")")"
     fi
     # Touch registry files
     touch "$CT_OKAPI_REGFILE"
@@ -647,11 +648,11 @@ if ct_broadcast "$CT_ACTION"
 fi
 
 # Remove empty registry files
-if [ $(wc -l < "$CT_OKAPI_REGFILE") = "0" ]
+if [ "$(wc -l < "$CT_OKAPI_REGFILE")" = "0" ]
   then
     rm -f "$CT_OKAPI_REGFILE"
 fi
-if [ $(wc -l < "$CT_TENANT_REGFILE") = "0" ]
+if [ "$(wc -l < "$CT_TENANT_REGFILE")" = "0" ]
   then
     rm -f "$CT_TENANT_REGFILE"
 fi
