@@ -12,7 +12,7 @@
 
 
 # ================================= Copyright =================================
-# Version 0.0.2 (2020-07-22), Copyright (C) 2020
+# Version 0.0.3 (2020-07-23), Copyright (C) 2020
 # Author: Jo Drexl (johannes.drexl@lrz.de) for FOLIO
 # Coauthors: -
 
@@ -38,6 +38,8 @@
 # ================================= Variables =================================
 
 # Registry file for modules and their used ports
+# Until systemd has fixed the problem with PrivateTmp being inherited to
+# elevated sessions, we place the registry file in RAM.
 BO_REGFILE="/dev/shm/.folio_registry"
 
 
@@ -127,7 +129,7 @@ bo_portcheck() {
   # Obviously this port is used by another service
   CULPRIT=$(grep -E ".* $PORT$" "$BO_REGFILE" | cut -d " " -f 1)
   echo "FATAL: Port '$PORT' in use by '$CULPRIT'!"
-  return 1  
+  return 1
 }
 
 
@@ -181,6 +183,9 @@ if [ "$MODULE" != "$(echo "$BO_MODULE_ID" | grep -oE "[-a-z]+[a-z]")" ]
     exit 1
 fi
 
+# Create regfile, if necessary
+touch "$BO_REGFILE"
+
 
 # =================================== Main ====================================
 
@@ -212,5 +217,11 @@ case "$BO_ACTION" in
     echo "FATAL: Unrecognized action!"
     ;;
 esac
+
+# Delete an empty registry file
+if [ $(wc -l < "$BO_REGFILE") = "0" ]
+  then
+    rm -f "$BO_REGFILE"
+fi
 
 exit 0
