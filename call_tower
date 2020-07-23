@@ -273,7 +273,7 @@ ct_jsonhello() {
   echo -e  "{
   \"url\": \"http://$HOST:$PORT\",
   \"srvcId\": \"$CT_MODULE_ID\",
-  \"instId\": \"$CT_MODULE_ID\"\n}" > "$CT_TMPJSON_HELLO" 2>/dev/null
+  \"instId\": \"$HOST-$PORT\"\n}" > "$CT_TMPJSON_HELLO" 2>/dev/null
 
   # Check if that worked out
   if [ "$?" = "0" ]
