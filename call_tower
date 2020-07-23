@@ -247,7 +247,7 @@ ct_hello() {
   
   # Register module itself
   if ! RETURN=$(curl -D - -s -w '\n' -X POST -H "Content-type: application/json" \
-    -d @"$CT_TMPJSON_HELLO" http://$OKAPI/_/deployment/modules)
+    -d @"$CT_TMPJSON_HELLO" http://$OKAPI/_/discovery/modules)
     then
       echo "FATAL: Could not register module '$CT_MODULE_ID' to Okapi!"
       return 1
