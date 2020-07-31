@@ -15,7 +15,7 @@
 
 
 # ================================= Copyright =================================
-# Version 0.0.5 (2020-07-31), Copyright (C) 2020
+# Version 0.1.0 (2020-07-31), Copyright (C) 2020
 # Author: Jo Drexl (johannes.drexl@lrz.de) for FOLIO
 # Coauthors: -
 
@@ -153,7 +153,7 @@ ct_bye() {
       sed -i "/^$OKAPI$/d" "$CT_OKAPI_REGFILE"
       return 0
     else
-      echo -e "WARN: Okapi answered with unknown message:\n$RETURN"
+      echo -e "WARN: Okapi answered instance deregistration with unknown message:\n$RETURN"
       return 1
   fi
 }
@@ -262,7 +262,7 @@ ct_hello() {
       # prior run
       echo "WARN: Module instance already known; indicates bugged prior run."
     else
-      echo -e "ERROR: Okapi answered with unknown message:\n$RETURN"
+      echo -e "ERROR: Okapi answered instance registration with unknown message:\n$RETURN"
       return 1
   fi
   # Register Okapi instance to registry file, only if not already there
@@ -317,6 +317,7 @@ ct_liftoff() {
   
   # Local variables
   local OKAPI="$1"
+  local RETURN
   local TENANT="$2"
   
   # Check variables
@@ -339,21 +340,27 @@ ct_liftoff() {
       return 0
   fi
   
-  # Register module for tenant
-  if ! RETURN="$(curl -D - -s -w '\n' -X POST -H "Content-type: application/json" \
-    -d @"$CT_TMPJSON_TENANTS" http://$OKAPI/_/proxy/tenants/$TENANT/modules)"
+  # Check if this module has already been registered to this tenant
+  RETURN="$(curl -s -w '\n' http://$OKAPI/_/proxy/tenants/$TENANT/modules)"
+  if ! echo -e "$RETURN" | grep "$CT_MODULE_ID" > /dev/null 2>&1
     then
-      echo "ERROR: Could not bind module '$CT_MODULE_ID' to tenant '$TENANT'!"
-      return 1
-  fi
-  
-  # Interpret return message
-  if echo -e "$RETURN" | grep "HTTP/1.1 201 Created" > /dev/null 2>&1
-    then
-      echo "INFO: Module bound to tenant '$TENANT'."
+      # Register module for tenant
+      if ! RETURN="$(curl -D - -s -w '\n' -X POST -H "Content-type: application/json" \
+        -d @"$CT_TMPJSON_TENANTS" http://$OKAPI/_/proxy/tenants/$TENANT/modules)"
+        then
+          echo "ERROR: Could not bind module '$CT_MODULE_ID' to tenant '$TENANT'!"
+          return 1
+      fi
+      # Interpret return message
+      if echo -e "$RETURN" | grep "HTTP/1.1 201 Created" > /dev/null 2>&1
+        then
+          echo "INFO: Module bound to tenant '$TENANT'."
+        else
+          echo -e "WARN: Okapi answered binding to '$TENANT' with unknown message:\n$RETURN"
+          return 1
+      fi
     else
-      echo -e "WARN: Okapi answered with unknown message:\n$RETURN"
-      return 1
+      echo "INFO: Module already bound to tenant '$TENANT' by another instance."
   fi
   # Only write tenant to the registry file, if it's not already there
   if ! grep -E "^$TENANT$" "$CT_TENANT_REGFILE" > /dev/null 2>&1
@@ -393,7 +400,7 @@ ct_register() {
       echo "INFO: ModuleDescriptor for '$CT_MODULE_ID'registered with Okapi."
       return 0
     else
-      echo -e "ERROR: Okapi answered with unknown message:\n$RETURN"
+      echo -e "ERROR: Okapi answered module declaration with unknown message:\n$RETURN"
       return 1
   fi
 }
@@ -471,6 +478,7 @@ ct_touchdown() {
 
   # Local variables
   local OKAPI="$1"
+  local RETURN
   local TENANT="$2"
   
   # Check variables
@@ -485,37 +493,35 @@ ct_touchdown() {
       echo "ERROR: No tenant provided to ct_touchdown!"
       return 1
   fi
-  
-  # Race condition handling
-  if ! grep -E "^$TENANT$" "$CT_TENANT_REGFILE" > /dev/null 2>&1
+
+  # Only deregister from Okapi if we're the only instance left
+  RETURN="$(curl -s -w '\n' http://$OKAPI/_/discovery/modules)"
+  if [ "$(echo -e "$RETURN" | grep -cE "\"srvcId\" : \"$CT_MODULE_ID\"" 2>&1)" = "1" ]
     then
-      # Tenant is no longer registered (was registered twice on error)
-      return 0
-  fi
-  # Deregister module for tenant
-  if ! RETURN="$(curl -D - -s -w '\n' -X DELETE http://$OKAPI/_/proxy/tenants/$TENANT/modules/$CT_MODULE_ID)"
-    then
-      echo "ERROR: Could not unbind module '$CT_MODULE_ID' from tenant '$TENANT'!"
-      return 1
-  fi
-  
-  # Interpret return message
-  if echo -e "$RETURN" | grep "HTTP/1.1 204 No Content" > /dev/null 2>&1
-    then
-      # Delete the tenant form the registry file
-      sed -i "/^$TENANT$/d" "$CT_TENANT_REGFILE"
-      echo "INFO: Module unbound from tenant '$TENANT'."
-      return 0
-  elif echo -e "$RETURN" | grep "HTTP/1.1 404 Not Found" > /dev/null 2>&1
-    then
-      # Delete the tenant form the registry file
-      sed -i "/^$TENANT$/d" "$CT_TENANT_REGFILE"
-      echo "INFO: Module was not bound to tenant '$TENANT'."
-      return 0
+      # Deregister module for tenant
+      if ! RETURN="$(curl -D - -s -w '\n' -X DELETE http://$OKAPI/_/proxy/tenants/$TENANT/modules/$CT_MODULE_ID)"
+        then
+          echo "ERROR: Could not unbind module '$CT_MODULE_ID' from tenant '$TENANT'!"
+          return 1
+      fi
+      # Interpret return message
+      if echo -e "$RETURN" | grep "HTTP/1.1 204 No Content" > /dev/null 2>&1
+        then
+          echo "INFO: Module unbound from tenant '$TENANT'."
+      elif echo -e "$RETURN" | grep "HTTP/1.1 404 Not Found" > /dev/null 2>&1
+        then
+          echo "INFO: Module was not bound to tenant '$TENANT'."
+        else
+          echo -e "WARN: Okapi answered unbinding of '$TENANT' with unknown message:\n$RETURN"
+          return 1
+      fi
     else
-      echo -e "WARN: Okapi answered with unknown message:\n$RETURN"
-      return 1
+      echo "INFO: Module did not unbind from tenant '$TENANT', as there's another instance available."
   fi
+  
+  # Delete the tenant from the registry file
+  sed -i "/^$TENANT$/d" "$CT_TENANT_REGFILE"
+  return 0
 }
 
 
@@ -595,7 +601,7 @@ if [ -f "$CT_TENANTFILE-$PORT" -o -L "$CT_TENANTFILE-$PORT" ]
     fi
 fi
 
-# Read the module id (mod_xy-$VERSION)
+# Read the module id (mod-xy-$VERSION)
 CT_MODULE_ID="$(grep -Em 1 "\"id\":" "$JSON_FILE" | cut -d '"' -f 4 -s)"
 # Check if it's invalid
 if ! echo "$CT_MODULE_ID" | grep -E "^[-a-z]+[\.0-9]+$" > /dev/null
@@ -607,14 +613,6 @@ fi
 if [ "$MODULE" != "$(echo "$CT_MODULE_ID" | grep -oE "[-a-z]+[a-z]")" ]
   then
     echo "FATAL: Module variable contains '$MODULE', but JSON is for '$(echo "$CT_MODULE_ID" | grep -oE "[-a-z]+[a-z]")'."
-    exit 1
-fi
-# Get interface name
-CT_INTERFACE="$(grep -Em 1 -A 3 "\"provides\":" "$JSON_FILE" | grep -Em 1 "\"id\":" | cut -d '"' -f 4 -s)"
-# Check if it's invalid
-if ! echo "$CT_INTERFACE" | grep -E "^[-a-z0-9]+$" > /dev/null
-  then
-    echo "FATAL: Detected interface was '$CT_INTERFACE', can't work with that!"
     exit 1
 fi
 
