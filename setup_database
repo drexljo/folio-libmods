@@ -378,7 +378,10 @@ fi
 # Use a random string for an empty password
 if [ "$FM_PGPASSWD" = "" ]
   then
-    FM_PGPASSWD=$(</dev/urandom tr -dc 'A-Za-z0-9!#$%&()*+,-./:;<=>?@[]^_`{|}~' | head -c 24)
+    FM_PGPASSWD=$(</dev/urandom tr -dc 'A-Za-z0-9!#$%&()*+,-./:;<>?@[]^_`{|}~' | head -c 24)
+  else
+    # Strip forbidden characters to avoid problems
+    FO_PGPASSWD=$(echo "$FO_PGPASSWD" | tr -dc 'A-Za-z0-9!#$%&()*+,-./:;<>?@[]^_`{|}~')
 fi
 
 # Write the settings to the environment file, setting it secure first

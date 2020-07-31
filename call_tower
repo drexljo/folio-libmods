@@ -15,7 +15,7 @@
 
 
 # ================================= Copyright =================================
-# Version 0.0.3 (2020-07-23), Copyright (C) 2020
+# Version 0.0.4 (2020-07-31), Copyright (C) 2020
 # Author: Jo Drexl (johannes.drexl@lrz.de) for FOLIO
 # Coauthors: -
 
@@ -487,6 +487,12 @@ ct_touchdown() {
       sed -i "/^$TENANT$/d" "$CT_TENANT_REGFILE"
       echo "INFO: Module unbound from tenant '$TENANT'."
       return 0
+  elif echo -e "$RETURN" | grep "HTTP/1.1 404 Not Found" > /dev/null 2>&1
+    then
+      # Delete the tenant form the registry file
+      sed -i "/^$TENANT$/d" "$CT_TENANT_REGFILE"
+      echo "INFO: Module was not bound to tenant '$TENANT'."
+      return 0
     else
       echo -e "WARN: Okapi answered with unknown message:\n$RETURN"
       return 1
@@ -596,6 +602,9 @@ fi
 # Set absolute path for the registry files
 CT_OKAPI_REGFILE="$HOME/$CT_OKAPI_REGFILE-$PORT"
 CT_TENANT_REGFILE="$HOME/$CT_TENANT_REGFILE-$PORT"
+# Touch registry files
+touch "$CT_OKAPI_REGFILE"
+touch "$CT_TENANT_REGFILE"
 
 # Set temp files for communication
 CT_TMPJSON_HELLO="/tmp/$MODULE-$PORT-hello.json"
@@ -623,9 +632,6 @@ case "$CT_ACTION" in
       then
         CT_OKAPI="$(echo -e "$CT_OKAPI\n$(<"$CT_OKAPIFILE")")"
     fi
-    # Touch registry files
-    touch "$CT_OKAPI_REGFILE"
-    touch "$CT_TENANT_REGFILE"
     # Prepare json files
     if ! ct_jsonhello && ct_jsontenant
       then
