@@ -15,7 +15,7 @@
 
 
 # ================================= Copyright =================================
-# Version 0.0.4 (2020-07-31), Copyright (C) 2020
+# Version 0.0.5 (2020-07-31), Copyright (C) 2020
 # Author: Jo Drexl (johannes.drexl@lrz.de) for FOLIO
 # Coauthors: -
 
@@ -140,7 +140,7 @@ ct_bye() {
   fi
   
   # Delete module instance from Okapi
-  if ! RETURN="$(curl -D - -s -w '\n' -X DELETE http://$OKAPI/_/deployment/modules/$CT_MODULE_ID/$HOST-$PORT)"
+  if ! RETURN="$(curl -D - -s -w '\n' -X DELETE http://$OKAPI/_/discovery/modules/$CT_MODULE_ID/$HOST-$PORT)"
     then
       echo "FATAL: Could not deregister module '$CT_MODULE_ID' from Okapi!"
       return 1
@@ -255,14 +255,23 @@ ct_hello() {
   # Interpret return message
   if echo -e "$RETURN" | grep "HTTP/1.1 201 Created" > /dev/null 2>&1
     then
-      # Register Okapi instance to registry file
-      echo "$OKAPI" >> "$CT_OKAPI_REGFILE"
       echo "INFO: Module registered with Okapi."
-      return 0
+  elif echo -e "$RETURN" | grep "Duplicate instId" > /dev/null 2>&1
+    then
+      # Okapi already knows of this modules instance, probably from a bugged
+      # prior run
+      echo "WARN: Module instance already known; indicates bugged prior run."
     else
       echo -e "ERROR: Okapi answered with unknown message:\n$RETURN"
       return 1
   fi
+  # Register Okapi instance to registry file, only if not already there
+  # This should repair prior bugged runs on module side
+  if ! grep -E "^$OKAPI$" "$CT_OKAPI_REGFILE" > /dev/null 2>&1
+    then
+      echo "$OKAPI" >> "$CT_OKAPI_REGFILE"
+  fi
+  return 0
 }
 
 # Create JSON to register module to Okapi
@@ -322,6 +331,13 @@ ct_liftoff() {
       echo "ERROR: No tenant provided to ct_liftoff!"
       return 1
   fi
+  # Silently ignore supertenant
+  if [ "$TENANT" = "supertenant" ]
+    then
+      # Can not do anything here
+      echo "WARN: '$TENANT' is no valid tenant for modules! Ignored."
+      return 0
+  fi
   
   # Register module for tenant
   if ! RETURN="$(curl -D - -s -w '\n' -X POST -H "Content-type: application/json" \
@@ -334,14 +350,17 @@ ct_liftoff() {
   # Interpret return message
   if echo -e "$RETURN" | grep "HTTP/1.1 201 Created" > /dev/null 2>&1
     then
-      # Write tenant to the registry file
-      echo "$TENANT" >> "$CT_TENANT_REGFILE"
       echo "INFO: Module bound to tenant '$TENANT'."
-      return 0
     else
       echo -e "WARN: Okapi answered with unknown message:\n$RETURN"
       return 1
   fi
+  # Only write tenant to the registry file, if it's not already there
+  if ! grep -E "^$TENANT$" "$CT_TENANT_REGFILE" > /dev/null 2>&1
+    then
+      echo "$TENANT" >> "$CT_TENANT_REGFILE"
+  fi
+  return 0
 }
 
 # Register the module descriptor to Okapi
@@ -633,9 +652,14 @@ case "$CT_ACTION" in
         CT_OKAPI="$(echo -e "$CT_OKAPI\n$(<"$CT_OKAPIFILE")")"
     fi
     # Prepare json files
-    if ! ct_jsonhello && ct_jsontenant
+    if ! ct_jsonhello
       then
-        echo "FATAL: Could not create deployment JSON files!"
+        echo "FATAL: Could not create module deployment JSON file!"
+        exit 1
+    fi
+    if ! ct_jsontenant
+      then
+        echo "FATAL: Could not create tenant deployment JSON file!"
         exit 1
     fi
     ;;
