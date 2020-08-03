@@ -15,7 +15,7 @@
 
 
 # ================================= Copyright =================================
-# Version 0.2.2 (2020-08-03), Copyright (C) 2020
+# Version 0.2.3 (2020-08-03), Copyright (C) 2020
 # Author: Jo Drexl (johannes.drexl@lrz.de) for FOLIO
 # Coauthors: -
 
@@ -725,7 +725,10 @@ case "$CT_ACTION" in
         exit 1
     fi
     # Prepare module ID file
-    echo "$CT_MODULE_ID" > "$CT_IDFILE" 2>/dev/null
+    if [ ! -f "$CT_IDFILE" -o -w "$CT_IDFILE" ]
+      then
+        echo "$CT_MODULE_ID" > "$CT_IDFILE"
+    fi
     ;;
 esac
 
