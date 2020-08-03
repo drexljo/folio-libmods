@@ -9,13 +9,13 @@
 # HOST (optional, for systems behind NATs)
 # JSON_FILE
 # MODULE
-# OKAPI_HOST (optional, can be replaced/expanded with a okapi_multi file)
-# OKAPI_PORT (optional, can be replaced/expanded with a okapi_multi file)
+# OKAPI_HOST (optional, can be replaced/expanded with an okapi_multi file)
+# OKAPI_PORT (optional, can be replaced/expanded with an okapi_multi file)
 # PORT
 
 
 # ================================= Copyright =================================
-# Version 0.2.3 (2020-08-03), Copyright (C) 2020
+# Version 0.3.0 (2020-08-03), Copyright (C) 2020
 # Author: Jo Drexl (johannes.drexl@lrz.de) for FOLIO
 # Coauthors: -
 
@@ -40,6 +40,9 @@
 
 # ================================= Variables =================================
 
+# Timeout for script execution and Okapi connection retries
+CT_TIMEOUT="60"
+
 # Optional file to specify multiple okapi hosts and ports
 # If there are files with -$PORT in the end, we will find and apply them
 CT_OKAPIFILE="/etc/folio/$MODULE/okapi_multi"
@@ -47,9 +50,6 @@ CT_OKAPIFILE="/etc/folio/$MODULE/okapi_multi"
 # Tenantfile
 # If there are tenant files with -$PORT in the end, we will find and apply them
 CT_TENANTFILE="/etc/folio/$MODULE/tenants"
-
-# Lock file destination (shutdown only)
-CT_LOCKFILE="/dev/shm/$MODULE.lock"
 
 # File to register the okapi instances to, so we know which okapi the module was
 # registered to; will reside in the home directory of the invocating user and
@@ -63,6 +63,8 @@ CT_OKAPI_REGFILE=".okapi"
 # invocation
 CT_TENANT_REGFILE=".tenants"
 
+# Lock file destination (shutdown only)
+CT_LOCKFILE="/dev/shm/$MODULE.lock"
 
 # ================================= Functions =================================
 
@@ -104,6 +106,13 @@ ct_broadcast() {
           continue
       fi
       
+      # Check if Okapi is reachable
+      if ! ct_ping "$OKAPI" 
+        then
+          echo "ERROR: '$OKAPI' did not answer in time!"
+          ERRORS="$(( $ERRORS + 1 ))"
+          continue
+      fi
       # Work the chores
       if ! ct_chores "$OKAPI" "$ACTION"
         then
@@ -148,18 +157,18 @@ ct_bye() {
   # Delete module instance from Okapi
   if ! RETURN="$(curl -D - -s -w '\n' -X DELETE http://$OKAPI/_/discovery/modules/$CT_MODULE_ID/$HOST-$PORT)"
     then
-      echo "FATAL: Could not deregister module '$CT_MODULE_ID' from Okapi!"
+      echo "FATAL: Could not deregister module instance '$HOST:$PORT' from '$OKAPI'!"
       return 1
   fi
   # Interpret return message
   if echo -e "$RETURN" | grep "HTTP/1.1 204 No Content" > /dev/null 2>&1
     then
-      echo "INFO: Module deregistered from Okapi."
+      echo "INFO: Module instance '$HOST:$PORT' deregistered from '$OKAPI'."
       # Delete the okapi instance form the registry file
       sed -i "/^$OKAPI$/d" "$CT_OKAPI_REGFILE"
       return 0
     else
-      echo -e "WARN: Okapi answered instance deregistration with unknown message:\n$RETURN"
+      echo -e "WARN: '$OKAPI' answered instance deregistration of '$HOST:$PORT' with unknown message:\n$RETURN"
       return 1
   fi
 }
@@ -255,20 +264,20 @@ ct_hello() {
   if ! RETURN="$(curl -D - -s -w '\n' -X POST -H "Content-type: application/json" \
     -d @"$CT_TMPJSON_HELLO" http://$OKAPI/_/discovery/modules)"
     then
-      echo "FATAL: Could not register module '$CT_MODULE_ID' to Okapi!"
+      echo "FATAL: Could not register module instance '$HOST:$PORT' to '$OKAPI'!"
       return 1
   fi
   # Interpret return message
   if echo -e "$RETURN" | grep "HTTP/1.1 201 Created" > /dev/null 2>&1
     then
-      echo "INFO: Module registered with Okapi."
+      echo "INFO: Module instance '$HOST:$PORT' registered with '$OKAPI'."
   elif echo -e "$RETURN" | grep "Duplicate instId" > /dev/null 2>&1
     then
       # Okapi already knows of this modules instance, probably from a bugged
       # prior run
-      echo "WARN: Module instance already known; indicates bugged prior run."
+      echo "WARN: Module instance '$HOST:$PORT' already known to '$OKAPI'; may indicate a bugged prior run."
     else
-      echo -e "ERROR: Okapi answered instance registration with unknown message:\n$RETURN"
+      echo -e "ERROR: '$OKAPI' answered instance registration of '$HOST:$PORT' with unknown message:\n$RETURN"
       return 1
   fi
   # Register Okapi instance to registry file, only if not already there
@@ -354,19 +363,19 @@ ct_liftoff() {
       if ! RETURN="$(curl -D - -s -w '\n' -X POST -H "Content-type: application/json" \
         -d @"$CT_TMPJSON_TENANTS" http://$OKAPI/_/proxy/tenants/$TENANT/modules)"
         then
-          echo "ERROR: Could not bind module '$CT_MODULE_ID' to tenant '$TENANT'!"
+          echo "ERROR: Could not bind module '$CT_MODULE_ID' to tenant '$TENANT' on '$OKAPI'!"
           return 1
       fi
       # Interpret return message
       if echo -e "$RETURN" | grep "HTTP/1.1 201 Created" > /dev/null 2>&1
         then
-          echo "INFO: Module bound to tenant '$TENANT'."
+          echo "INFO: Module '$CT_MODULE_ID' bound to tenant '$TENANT' on '$OKAPI'."
         else
-          echo -e "WARN: Okapi answered binding to '$TENANT' with unknown message:\n$RETURN"
+          echo -e "WARN: '$OKAPI' answered binding module '$CT_MODULE_ID' to '$TENANT' with unknown message:\n$RETURN"
           return 1
       fi
     else
-      echo "INFO: Module already bound to tenant '$TENANT' by another instance."
+      echo "INFO: Module '$CT_MODULE_ID' already bound to tenant '$TENANT' on '$OKAPI' by another instance."
   fi
   # Only write tenant to the registry file, if it's not already there
   if ! grep -E "^$TENANT$" "$CT_TENANT_REGFILE" > /dev/null 2>&1
@@ -387,7 +396,7 @@ ct_lock() {
   local PID="$$"
   
   # Implement a 60 seconds timeout
-  END=$(( $(date +%s) + 60 ))
+  END=$(( $(date +%s) + $CT_TIMEOUT ))
   
   # Loop this until timeout is reached
   while [ "$(date +%s)" -le "$END" ]
@@ -414,7 +423,47 @@ ct_lock() {
   # failure
   return 1
 }
+
+# Tries the connection until Okapi responds with proper answers
+ct_ping() {
+  # Expects the okapi to connect to as parameter 1
+  # Returns 0 on success
+  # Returns 1 on failure
   
+  # Local variables
+  local END
+  local ITERATION="$CT_TIMEOUT"
+  local OKAPI="$1"
+  local TENANTS
+  
+  # Check for Okapi to be set
+  if [ "$OKAPI" = "" ]
+    then
+      echo "FATAL: Okapi was not provided for ct_ping."
+      return 1
+  fi
+  
+  # Implement a 90 seconds timeout
+  END=$(( $(date +%s) + $CT_TIMEOUT ))
+  
+  # Get current tenants
+  while [ "$(date +%s)" -le "$END" ]
+    do
+      # Try to connect and get the tenants
+      TENANTS=$(curl -w '\n' "$OKAPI/_/proxy/tenants" 2>/dev/null | grep '"id" :' | cut -d '"' -f 4 | sort -u)
+      # There has to be at least the supertenant, otherwise Okapi is not ready yet
+      if echo "$TENANTS" | grep "supertenant" >/dev/null 2>&1
+        then
+          # Now Okapi is ready
+          return 0
+      fi
+      # Get a litte sleep before the next iteration
+      sleep 1
+    done
+  # If timeout is reached, we return beaten
+  return 1
+}
+
 # Register the module descriptor to Okapi
 ct_register() {
   # Expects the okapi to connect to as parameter 1
@@ -436,16 +485,16 @@ ct_register() {
   if ! RETURN="$(curl -D - -s -w '\n' -X POST -H "Content-type: application/json" \
     -d @"$JSON_FILE" http://$OKAPI/_/proxy/modules)"
      then
-      echo "FATAL: Could not register module '$CT_MODULE_ID' to Okapi!"
+      echo "FATAL: Could not register ModuleDescriptor for '$CT_MODULE_ID' to '$OKAPI'!"
       return 1
   fi
   # Interpret return message
   if echo -e "$RETURN" | grep "HTTP/1.1 201 Created" > /dev/null 2>&1
     then
-      echo "INFO: ModuleDescriptor for '$CT_MODULE_ID'registered with Okapi."
+      echo "INFO: ModuleDescriptor for '$CT_MODULE_ID' registered with '$OKAPI'."
       return 0
     else
-      echo -e "ERROR: Okapi answered module declaration with unknown message:\n$RETURN"
+      echo -e "ERROR: '$OKAPI' answered module declaration of '$CT_MODULE_ID' with unknown message:\n$RETURN"
       return 1
   fi
 }
@@ -507,7 +556,7 @@ ct_runway() {
   # Errors on touchdown are critical
   if [ "$ACTION" = "touchdown" -a "$ERRORS" != "0" ]
     then
-      echo "CRITICAL: Errors occured while deregistrating modules! Check Okapi!"
+      echo "CRITICAL: Errors occured while deregistrating modules! Check '$OKAPI'!"
       return 1
   fi
   
@@ -546,22 +595,22 @@ ct_touchdown() {
       # Deregister module for tenant
       if ! RETURN="$(curl -D - -s -w '\n' -X DELETE http://$OKAPI/_/proxy/tenants/$TENANT/modules/$CT_MODULE_ID)"
         then
-          echo "ERROR: Could not unbind module '$CT_MODULE_ID' from tenant '$TENANT'!"
+          echo "ERROR: Could not unbind module '$CT_MODULE_ID' from tenant '$TENANT' on '$OKAPI'!"
           return 1
       fi
       # Interpret return message
       if echo -e "$RETURN" | grep "HTTP/1.1 204 No Content" > /dev/null 2>&1
         then
-          echo "INFO: Module unbound from tenant '$TENANT'."
+          echo "INFO: Module '$CT_MODULE_ID' unbound from tenant '$TENANT' on '$OKAPI'."
       elif echo -e "$RETURN" | grep "HTTP/1.1 404 Not Found" > /dev/null 2>&1
         then
-          echo "INFO: Module was not bound to tenant '$TENANT'."
+          echo "INFO: Module '$CT_MODULE_ID' was not bound to tenant '$TENANT' on '$OKAPI'."
         else
-          echo -e "WARN: Okapi answered unbinding of '$TENANT' with unknown message:\n$RETURN"
+          echo -e "WARN: '$OKAPI' answered module unbinding of '$CT_MODULE_ID' from '$TENANT' with unknown message:\n$RETURN"
           return 1
       fi
     else
-      echo "INFO: Module did not unbind from tenant '$TENANT', as there's another instance available."
+      echo "INFO: Module '$CT_MODULE_ID' did not unbind from tenant '$TENANT' on '$OKAPI', as there's another instance available."
   fi
   
   # Delete the tenant from the registry file
@@ -686,14 +735,6 @@ case "$CT_ACTION" in
     # Prepare the okapi list
     CT_OKAPI="$(<"$CT_OKAPI_REGFILE")"
     # " # This is just to circumvent a bug in syntax interpretation of gedit
-    # For signoff we need to make sure we pull down one module instance after 
-    # the other, as to prevent race conditions in unbinding from tenants when
-    # pulling down the last module
-    if ! ct_lock
-      then
-        echo "Lock file was always used by other processes!"
-        exit 1
-    fi
     # Harden module ID during updates (as the new JSON will contain an updated
     # ID despite we're still a process of the old one)
     if [ -f "$CT_IDFILE" ]
@@ -732,6 +773,13 @@ case "$CT_ACTION" in
     ;;
 esac
 
+# Preventing race conditions with Okapi as good as possible
+if ! ct_lock
+  then
+    echo "Lock file was continuously used by other processes!"
+    exit 1
+fi
+
 
 # =================================== Main ====================================
 
@@ -755,12 +803,12 @@ if [ "$(wc -l < "$CT_TENANT_REGFILE")" = "0" ]
 fi
     
 # Remove temp files (no problem if not existing)
+rm -f "$CT_LOCKFILE"
 rm -f "$CT_TMPJSON_HELLO"
 rm -f "$CT_TMPJSON_TENANTS"
 if [ "$CT_ACTION" = "signoff" ]
   then
     rm -f "$CT_IDFILE" 2>/dev/null
-    rm -f "$CT_LOCKFILE"
 fi
 
 # Exit with code derived from ct_broadcast
