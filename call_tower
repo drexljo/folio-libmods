@@ -15,7 +15,7 @@
 
 
 # ================================= Copyright =================================
-# Version 0.2.0 (2020-08-03), Copyright (C) 2020
+# Version 0.2.1 (2020-08-03), Copyright (C) 2020
 # Author: Jo Drexl (johannes.drexl@lrz.de) for FOLIO
 # Coauthors: -
 
@@ -722,7 +722,7 @@ case "$CT_ACTION" in
         exit 1
     fi
     # Prepare module ID file
-    echo "$CT_MODULE_ID" > "$CT_IDFILE"
+    echo "$CT_MODULE_ID" > "$CT_IDFILE" 2>/dev/null
     ;;
 esac
 
@@ -753,7 +753,7 @@ rm -f "$CT_TMPJSON_HELLO"
 rm -f "$CT_TMPJSON_TENANTS"
 if [ "$CT_ACTION" = "signoff" ]
   then
-    rm -f "$CT_IDFILE"
+    rm -f "$CT_IDFILE" 2>/dev/null
     rm -f "$CT_LOCKFILE"
 fi
 

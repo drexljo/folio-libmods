@@ -12,7 +12,7 @@
 
 
 # ================================= Copyright =================================
-# Version 0.0.4 (2020-08-03), Copyright (C) 2020
+# Version 0.1.0 (2020-08-03), Copyright (C) 2020
 # Author: Jo Drexl (johannes.drexl@lrz.de) for FOLIO
 # Coauthors: -
 
@@ -208,10 +208,11 @@ case "$BO_ACTION" in
         # Messaging has already been taken care of
         exit 1
     fi
+    rm -f "$BO_IDFILE" 2>/dev/null
     ;;
   on)
     # Write module ID to ID file
-    echo "$BO_MODULE_ID" > "$BO_IDFILE"
+    echo "$BO_MODULE_ID" > "$BO_IDFILE" 2>/dev/null
     # Check and register port
     if ! bo_portcheck
       then
