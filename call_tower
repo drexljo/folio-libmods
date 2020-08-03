@@ -15,7 +15,7 @@
 
 
 # ================================= Copyright =================================
-# Version 0.2.1 (2020-08-03), Copyright (C) 2020
+# Version 0.2.2 (2020-08-03), Copyright (C) 2020
 # Author: Jo Drexl (johannes.drexl@lrz.de) for FOLIO
 # Coauthors: -
 
@@ -117,7 +117,10 @@ ct_broadcast() {
     done 9<<< "$(echo "$CT_OKAPI")"
   
   # Report
-  echo "INFO: Communication with $ITERATION Okapi servers successful."
+  if [ "$ITERATION" != "0" ]
+    then
+      echo "INFO: Communication with $ITERATION Okapi servers successful."
+  fi
   if [ "$ERRORS" != "0" ]
     then
       echo "ERROR: Communication with $ERRORS Okapi servers failed."
