@@ -669,6 +669,9 @@ touch "$CT_TENANT_REGFILE"
 CT_TMPJSON_HELLO="/tmp/$MODULE-$PORT-hello.json"
 CT_TMPJSON_TENANTS="/tmp/$MODULE-$PORT-tenants.json"
 
+# Set temp file for Module ID
+CT_IDFILE="/tmp/$MODULE-$PORT.id"
+
 # Prepare environment to work with
 case "$CT_ACTION" in
   signoff)
@@ -687,6 +690,14 @@ case "$CT_ACTION" in
       then
         echo "Lock file was always used by other processes!"
         exit 1
+    fi
+    # Harden module ID during updates (as the new JSON will contain an updated
+    # ID despite we're still a process of the old one)
+    if [ -f "$CT_IDFILE" ]
+      then
+        # Use our saved ID
+        CT_MODULE_ID="$(<"$CT_IDFILE")"
+        # " # This is just to circumvent a bug in syntax interpretation of gedit
     fi
     ;;
   signon)
@@ -710,6 +721,8 @@ case "$CT_ACTION" in
         echo "FATAL: Could not create tenant deployment JSON file!"
         exit 1
     fi
+    # Prepare module ID file
+    echo "$CT_MODULE_ID" > "$CT_IDFILE"
     ;;
 esac
 
@@ -740,6 +753,7 @@ rm -f "$CT_TMPJSON_HELLO"
 rm -f "$CT_TMPJSON_TENANTS"
 if [ "$CT_ACTION" = "signoff" ]
   then
+    rm -f "$CT_IDFILE"
     rm -f "$CT_LOCKFILE"
 fi
 
