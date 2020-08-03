@@ -12,7 +12,7 @@
 
 
 # ================================= Copyright =================================
-# Version 0.0.3 (2020-07-23), Copyright (C) 2020
+# Version 0.0.4 (2020-08-03), Copyright (C) 2020
 # Author: Jo Drexl (johannes.drexl@lrz.de) for FOLIO
 # Coauthors: -
 
@@ -168,6 +168,9 @@ if [ ! -f "$JSON_FILE" ]
     exit 1
 fi
 
+# Set temp file for Module ID
+BO_IDFILE="/tmp/$MODULE-$PORT.id"
+
 # Read the module id (mod_xy-$VERSION)
 BO_MODULE_ID=$(grep -Em 1 "\"id\":" "$JSON_FILE" | cut -d '"' -f 4 -s)
 # Check if it's invalid
@@ -181,6 +184,13 @@ if [ "$MODULE" != "$(echo "$BO_MODULE_ID" | grep -oE "[-a-z]+[a-z]")" ]
   then
     echo "FATAL: Module variable contains '$MODULE', but JSON is for '$(echo "$BO_MODULE_ID" | grep -oE "[-a-z]+[a-z]")'."
     exit 1
+fi
+
+# Correct module ID if it changed during updates, but service restart did not
+# yet happen
+if [ "$BO_ACTION" = "off" -a -f "$BO_IDFILE" ]
+  then
+    BO_MODULE_ID="$(<"$BO_IDFILE")"
 fi
 
 # Create regfile, if necessary
@@ -200,6 +210,8 @@ case "$BO_ACTION" in
     fi
     ;;
   on)
+    # Write module ID to ID file
+    echo "$BO_MODULE_ID" > "$BO_IDFILE"
     # Check and register port
     if ! bo_portcheck
       then
