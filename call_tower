@@ -48,6 +48,9 @@ CT_OKAPIFILE="/etc/folio/$MODULE/okapi_multi"
 # If there are tenant files with -$PORT in the end, we will find and apply them
 CT_TENANTFILE="/etc/folio/$MODULE/tenants"
 
+# Lock file destination (shutdown only)
+CT_LOCKFILE="/dev/shm/$MODULE.lock"
+
 # File to register the okapi instances to, so we know which okapi the module was
 # registered to; will reside in the home directory of the invocating user and
 # the port will be added to the end, to enable different okapis for each module
@@ -370,6 +373,45 @@ ct_liftoff() {
   return 0
 }
 
+# Puts the script execution to sleep until it owns a lock file (shutdown only)
+ct_lock() {
+  # Expects nothing
+  # Returns 0 on success
+  # Returns 1 on failure
+  
+  # Local variables
+  local END
+  local PID="$$"
+  
+  # Implement a 60 seconds timeout
+  END=$(( $(date +%s) + 60 ))
+  
+  # Loop this until timeout is reached
+  while [ "$(date +%s)" -le "$END" ]
+    do
+      # Sleep a random amount of milliseconds; this should stagger parallel
+      # started scripts even in the first iteration
+      sleep 0.$RANDOM
+      # Check if there's already a lock file
+      if [ ! -f "$CT_LOCKFILE" ]
+        then
+          echo "$PID" > "$CT_LOCKFILE"
+          # Go to next iteration; this prevents the file being read too fast
+          continue
+      fi
+      # Check if it's our file
+      if [ "$(<"$CT_LOCKFILE")" = "$PID" ]
+        then
+          return 0
+      fi
+      # Make sure the lock file is not too old (i. e. older than one minute)
+      find "$CT_LOCKFILE" -cmin +1 -delete 2>/dev/null
+    done
+  # If the file always was owned by other processes during runtime, report
+  # failure
+  return 1
+}
+  
 # Register the module descriptor to Okapi
 ct_register() {
   # Expects the okapi to connect to as parameter 1
@@ -637,7 +679,15 @@ case "$CT_ACTION" in
     fi
     # Prepare the okapi list
     CT_OKAPI="$(<"$CT_OKAPI_REGFILE")"
-    # This is just to circumvent a bug in syntax interpretation of gedit"
+    # " # This is just to circumvent a bug in syntax interpretation of gedit
+    # For signoff we need to make sure we pull down one module instance after 
+    # the other, as to prevent race conditions in unbinding from tenants when
+    # pulling down the last module
+    if ! ct_lock
+      then
+        echo "Lock file was always used by other processes!"
+        exit 1
+    fi
     ;;
   signon)
     # Prepare the okapi list
@@ -688,6 +738,10 @@ fi
 # Remove temp files (no problem if not existing)
 rm -f "$CT_TMPJSON_HELLO"
 rm -f "$CT_TMPJSON_TENANTS"
+if [ "$CT_ACTION" = "signoff" ]
+  then
+    rm -f "$CT_LOCKFILE"
+fi
 
 # Exit with code derived from ct_broadcast
 exit "$RETURN"
