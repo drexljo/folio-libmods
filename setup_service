@@ -1,0 +1,739 @@
+#!/bin/bash
+
+# setup_service
+# Service setup script for folio-mods. Needs the module name as parameter 1
+
+
+# ================================= Copyright =================================
+# Version 0.0.1 (2020-08-07), Copyright (C) 2020
+# Author: Jo Drexl (johannes.drexl@lrz.de) for FOLIO
+# Coauthors: -
+
+#   This file is part of the LRZ FOLIO debian package
+
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+
+#    http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+#   On Debian systems, the full text of the Apache License version 2.0
+#   can be found in the file 
+#     `/usr/share/common-licenses/Apache-2.0'
+
+
+# ================================= Variables =================================
+
+# Path of the config directories
+SS_CONFPATH="/etc/folio"
+
+# Autosetup directory
+# Its existence triggers the autosetup process, so subsequent modules don't
+# need to ask for their settings any more.
+SS_AUTOSETUP_DIR="/tmp/folio_autosetup"
+# Files within this directory are:
+# File to set ports in an autosetup condition
+SS_AUTOSETUP_PORTRANGE="service_portrange"
+# File to set the number of instances in an autosetup condition
+# If a file exists with the module name as an extension, it will be used instead
+SS_AUTOSETUP_INSTCOUNT="service_instancecount"
+
+# INTERNAL USE ONLY
+# The portlist file is written by this script, as to avoid recalculating it
+# over and over again. DO NOT USE THAT TO SET YOUR RANGE! Instead use the 
+# SS_AUTOSETUP_PORTRANGE file, for that is used with sanitizing measures
+SS_AUTO_PORTLIST="/tmp/.folio_service_portlist"
+
+
+# ================================= Functions =================================
+
+# Ask the user if really willing to abort this script
+ss_askabort() {
+  # Returns 0 on success
+  # Exits on abort
+  
+  # Ask if the user is really willing to abort
+  export NEWT_COLORS='root=,red'
+  if whiptail --title "$SS_PACKAGE - ABORT WARNING" --defaultno --yesno \
+    "If you abort here, the overall setup will continue, but not activate any instances. Are you sure?" \
+    8 78 3>&1 1>&2 2>&3
+    then
+      # User went for abort; nothing to do any longer
+      export NEWT_COLORS=""
+      return 1
+  fi
+  # User decided to continue
+  export NEWT_COLORS=""
+  return 0
+}
+
+# Ask the user for a port
+ss_askport() {
+  # Requires the question text as parameter 1
+  # Returns 0 on success
+  # Returns 1 on failure
+  # Echoes the users input, if it is a valid port
+
+  # Local variables
+  local ANSWER
+  local TEXT="$1"
+  
+  # Check text
+  if [ "$TEXT" = "" ]
+    then
+      return 1
+  fi
+  
+  # Loop the question and sanitizing
+  while true
+    do
+      # Question
+      if ! ANSWER=$(whiptail --title "$SS_PACKAGE - ports setup" \
+            --inputbox "$TEXT:" 8 78 3>&1 1>&2 2>&3)
+        then
+          # Can't really work any longer, if user aborts here
+          if ! ss_askabort
+            then
+              return 1
+          fi
+          continue
+      fi
+      # Check for a sane answer
+      if echo "$ANSWER" | grep -E "^[0-9]+$" > /dev/null 2>&1
+        then
+          if [ "$ANSWER" -ge "1025" -a "$ANSWER" -le "32767" ]
+            then
+              # Report back the answer
+              echo "$ANSWER"
+              return 0
+          fi
+      fi
+      # Handle bullshit answers
+      export NEWT_COLORS='root=,red'
+      whiptail --title "$SS_PACKAGE - ports setup" --msgbox \
+        "No valid port was given. Please try again." 8 78 3>&1 1>&2 2>&3
+      export NEWT_COLORS=""
+    done
+  
+  # Should not be possible to get here
+  return 1
+}
+
+# Get the active ports used
+ss_blockports_active() {
+  # Returns 0 on success
+  # Returns 1 on failure
+  # Echoes the a list for occupied ports on success
+
+  # Local variables
+  local LIST
+  
+  # Get the list of all listening ports
+  LIST=$(ss -HlnA tcp,udp | sed 's/[[:space:]]\+/ /g'| cut -d ':' -f 2 -s | cut -d ' ' -f 1 -s)
+  
+  # Check the list, should be only numbers
+  LIST=$(echo "$LIST" | grep -E "[0-9]+$")
+  
+  # Return the list, if existing
+  if [ "$LIST" = "" ]
+    then
+      return 1
+  fi
+  echo "$LIST"
+  return 0
+}
+
+# Get all ports that are blocked by IANA, be it TCP or UDP, derived from
+# /etc/services
+ss_blockports_iana() {
+  # Returns 0 on success
+  # Returns 1 on failure
+  # Echoes a list of occupied ports on success
+
+  # Local variables
+  local LIST
+  
+  # Check for existing file
+  if [ ! -f "/etc/services" ]
+    then
+      return 1
+  fi
+  
+  # Get the full list
+  LIST=$(grep -oE "[0-9]+/(tc|ud)p" "/etc/services" | cut -d "/" -f 1 -s)
+  
+  # The list may be way too long, but it's forbidden numbers, so we don't need
+  # to care. Besides: Cutting that down will actually use way more CPU time 
+  # than just keep going with the full messed up list
+  if [ "$LIST" = "" ]
+    then
+      return 1
+  fi
+  echo "$LIST"
+  return 0
+}
+
+# Get the already configured module ports from services, if there are some
+ss_blockports_services() {
+  # Returns 0 on success
+  # Returns 1 on failure
+  # Echoes a list of occupied ports on success
+
+  # Local variables
+  local LIST
+  
+  # Get the list of all configured (i. e. activated) folio mdoule units
+  LIST=$(ls -1 /etc/systemd/system/multi-user.target.wants/folio-mod-*@*.service 2>/dev/null)
+  
+  # Extract ports from the list
+  LIST=$(echo "$LIST" | cut -d "@" -f 2 -s | cut -d "." -f 1 -s | grep -oE "^[0-9]+$" 2>/dev/null)
+  
+  # Return the list, if existing
+  if [ "$LIST" = "" ]
+    then
+      return 1
+  fi
+  echo "$LIST"
+  return 0
+}
+
+# Check if the range is a proper one
+ss_check_portrange() {
+  # Takes the range as parameter 1
+  # Returns 0 on success
+  # Returns 1 on failure
+
+  # Local variables
+  local BEGIN
+  local END
+  local RANGE="$1"
+  
+  # Check the range for syntactic errors
+  if ! echo "$RANGE" | grep -m 1 -E "^[0-9]+-[0-9]+$" > /dev/null 2>&1
+    then
+      return 1
+  fi
+
+  # Separate upper and lower boundary
+  BEGIN=$(echo "$RANGE" | cut -d "-" -f 1 -s)
+  END=$(echo "$RANGE" | cut -d "-" -f 2 -s)
+  
+  # Check boundaries
+  if [ "$BEGIN" -lt "1025" -o "$BEGIN" -gt "32767" ]
+    then
+      return 1
+  fi
+  if [ "$END" -lt "1025" -o "$END" -gt "32767" ]
+    then
+      return 1
+  fi
+  # Check order
+  if [ "$BEGIN" -ge "$END" ]
+    then
+      return 1
+  fi
+
+  # All is well
+  return 0
+}
+
+# Message the user in case of an uncorrectable error
+ss_error() {
+  # Exits either way with exit code 0
+  
+  # Messages the user
+  export NEWT_COLORS='root=,red'
+  whiptail --title "$SS_PACKAGE - ERROR" --msgbox \
+    "Something went wrong, can't set up some or even all of your services. Please do that manually." \
+    8 78 3>&1 1>&2 2>&3
+  export NEWT_COLORS=""
+  
+  # This is the end, my friend
+  exit 0
+}
+
+# Get the configured instance count from an autosetup file, if there is one
+ss_getinstcount_autosetup() {
+  # Returns 0 on success
+  # Returns 1 on failure
+  # Echoes the instance count on success
+
+  # Local variables
+  local FALLBACK
+  local FILE
+  local INSTCOUNT
+  local LINE
+  
+  # Check if file exists
+  if [ -f "$SS_AUTOSETUP_INSTCOUNT.$SS_PACKAGE" ]
+    then
+      # Set fallback trigger in case this file is malformed
+      FALLBACK="1"
+      FILE="$SS_AUTOSETUP_INSTCOUNT.$SS_PACKAGE"
+  elif [ -f "$SS_AUTOSETUP_INSTCOUNT" ]
+    then
+      FILE="$SS_AUTOSETUP_INSTCOUNT"
+    else
+      return 1
+  fi
+  
+  # The file has to contain a single line only containing one number between
+  # 1 and 50. Search for that, use the first match
+  while read LINE
+    do
+      INSTCOUNT=$(echo "$LINE" | grep -m 1 -E "^[0-9]+$")
+      
+      # Check the range
+      if [ "$INSTCOUNT" -ge "1" -a "$INSTCOUNT" -le "50" ]
+        then
+          # It's a good count
+          echo "$INSTCOUNT"
+          return 0
+      fi
+    done < "$FILE"
+  
+  # If we arrive here, no proper line could be found
+  if [ "$FALLBACK" = "1" ]
+    then
+      # Remove malformed file
+      rm -f "$FILE"
+      # Start this subfunction again; the missing file will prompt it to fall
+      # back to the global one
+      if INSTCOUNT=$(ss_getinstcount_autosetup)
+        then
+          echo "$INSTCOUNT"
+          return 0
+      fi
+  fi
+  # Still no proper line found
+  return 1
+}
+
+# Get the instance count by asking the user (fallback)
+ss_getinstcount_feedback() {
+  # Returns 0 on success
+  # Returns 1 on failure
+  # Echoes the instance count on success
+
+  # Local variables
+  local INSTCOUNT
+  
+  # Loop the question
+  while true
+    do
+      # Question
+      if ! INSTCOUNT=$(whiptail --title "$SS_PACKAGE - Instances setup" \
+            --inputbox "Provide the number of instances you want to start for (every) module:" 8 78 3>&1 1>&2 2>&3)
+        then
+          # Can't really work any longer, if user aborts here
+          if ! ss_askabort
+            then
+              return 1
+          fi
+          continue
+      fi
+      # Check for a sane answer
+      if echo "$INSTCOUNT" | grep -E "^[0-9]+$" > /dev/null 2>&1
+        then
+          if [ "$INSTCOUNT" -ge "1" -a "$INSTCOUNT" -le "50" ]
+            then
+              # Report back the answer
+              echo "$INSTCOUNT"
+              # Check if we're in an autosetup, and if so, save the number for
+              # later modules
+              if [ "$SS_AUTOSETUP" = "1" ]
+                then
+                  echo "$INSTCOUNT" > "$SS_AUTOSETUP_INSTCOUNT"
+              fi
+              return 0
+          fi
+      fi
+      # Handle bullshit answers
+      export NEWT_COLORS='root=,red'
+      whiptail --title "$SS_PACKAGE - ports setup" --msgbox \
+        "Instance count must be between 1 and 50. Please try again." 8 78 3>&1 1>&2 2>&3
+      export NEWT_COLORS=""
+    done
+  
+  # Should not be possible to arrive here
+  return 1
+}
+
+# Get the configured portrange from an autosetup file, if there is one
+ss_getport_autosetup() {
+  # Returns 0 on success
+  # Returns 1 on failure
+  # Echoes the range on success
+
+  # Local variables
+  local BEGIN
+  local END
+  local LINE
+  local RANGE
+  
+  # Check if file exists
+  if [ ! -f "$SS_AUTOSETUP_PORTRANGE" ]
+    then
+      return 1
+  fi
+  
+  # The file has to contain a single line only containing two numbers from the
+  # range 1025-32767 separated by a single dash, the former number must be 
+  # smaller than the latter. Search for that, use the first match
+  while read LINE
+    do
+      RANGE=$(echo "$LINE" | grep -m 1 -E "^[0-9]+-[0-9]+$")
+      
+      # Check the range
+      if ss_check_portrange "$RANGE"
+        then
+          # It's a good range
+          echo "$RANGE"
+          return 0
+      fi
+    done < "$SS_AUTOSETUP_PORTRANGE"
+  
+  # If we arrive here, no proper line could be found
+  return 1
+}
+
+# Get the portrange by asking the user (fallback)
+ss_getport_feedback() {
+  # Returns 0 on success
+  # Returns 1 on failure
+  # Echoes the range on success
+
+  # Local variables
+  local BEGIN
+  local END
+  
+  # Give a little feedback and explanation to the user
+  whiptail --title "$SS_PACKAGE - ports setup" --msgbox \
+    "Provide your desired port range within the valid range of 1025-32767 to be used for the modules instances. Be advised that IANA registered and/or currently used ports will automatically be skipped as to avoid interference with other services on the machine. Please make sure the provided range is sufficiently large to provide for all your desired instances, as this setup is unable to forsee your future decisions." 12 78 3>&1 1>&2 2>&3
+  # Loop the questions
+  while true
+    do
+      # First ask for the port to begin the range
+      if ! BEGIN=$(ss_askport "Please provide the port to start the range with")
+        then
+          return 1
+      fi
+      if ! END=$(ss_askport "Please provide the port to end the range with")
+        then
+          return 1
+      fi
+      # Sanitize the range
+      if ss_check_portrange "$BEGIN-$END"
+        then
+          # Port range is proper
+          echo "$BEGIN-$END"
+          # Check if we're in an autosetup, and if so, save the range for
+          # later modules
+          if [ "$SS_AUTOSETUP" = "1" ]
+            then
+              echo "$BEGIN-$END" > "$SS_AUTOSETUP_PORTRANGE"
+          fi
+          return 0
+      fi
+      # Deal with bullshit ranges
+      export NEWT_COLORS='root=,red'
+      whiptail --title "$SS_PACKAGE - ports setup" --msgbox \
+        "Ports provided do not span a valid range: '$BEGIN-$END'" 8 78 3>&1 1>&2 2>&3
+      export NEWT_COLORS=""
+    done
+  
+  # Should not be possible to arrive here
+  return 1
+}
+
+# Get the configured portrange of okapi, if there is one
+ss_getport_okapi() {
+  # Returns 0 on success
+  # Returns 1 on failure
+  # Echoes the range on success
+
+  # Local variables
+  local BEGIN
+  local END
+  local FILE="$SS_CONFPATH/okapi/okapi.conf"
+  
+  # Check if file exists
+  if [ ! -f "$FILE" ]
+    then
+      return 1
+  fi
+  
+  BEGIN=$(grep "port_start=" "$FILE" | grep -oE "[0-9]+")
+  END=$(grep "port_end=" "$FILE" | grep -oE "[0-9]+")
+  
+  # Check the range
+  if ss_check_portrange "$BEGIN-$END"
+    then
+      # It's a good range
+      echo "$BEGIN-$END"
+      return 0
+  fi
+  # No proper range found
+  return 1
+}
+
+# Get all available ports
+ss_portlist() {
+  # Returns 0 on success
+  # Returns 1 on failure
+  # Echoes the sorted list of all available ports on success
+  
+  # Local variables
+  local BLOCKLIST
+  local LIST
+  local RANGE
+  local RETURN # Just to give the script something to do when running the ifs
+  
+  # Call functions in order, until one is successful
+  if RANGE=$(ss_getport_autosetup)
+    then
+      RETURN="0"
+  elif RANGE=$(ss_getport_okapi)
+    then
+      RETURN="0"
+  elif RANGE=$(ss_getport_feedback)
+    then
+      RETURN="0"
+    else
+      return 1
+  fi
+  
+  # This should not happen
+  if [ "$RANGE" = "" ]
+    then
+      return 1
+  fi
+  
+  # Now get the blocking ones
+  BLOCKLIST=$(echo -e "$(ss_blockports_active 2>/dev/null)\n$(ss_blockports_iana 2>/dev/null)\n$(ss_blockports_services 2>/dev/null)")
+  
+  # This should not happen
+  if [ "$BLOCKLIST" = "" ]
+    then
+      return 1
+  fi
+  
+  # Get the proper list
+  if ! LIST=$(ss_sortports "$RANGE" "$BLOCKLIST")
+    then
+      echo "LIST empty" >&2
+      return 1
+  fi
+  # Check the list
+  if [ "$LIST" != "" ]
+    then
+      # All is well
+      echo -e "$LIST"
+      # Save the list for later modules, so calculation time was not in vain
+      # even if something goes wrong down the road
+      echo -e "$LIST" > "$SS_AUTO_PORTLIST"
+      return 0
+  fi
+  # All is not well
+  return 1
+}
+
+# Set up as many instances as wished for and document that
+ss_setup() {
+  # Takes no parameters
+  # Returns 0 on success
+  # Returns 1 on failure
+  # Echoes the sorted list of all available ports
+
+  # Local variables
+  local ITERATION="1"
+  local PORT
+  
+  # Reload systemd daemon, to make sure the unit file is known
+  if ! systemctl daemon-reload > /dev/null 2>&1
+    then
+      echo "Could not reload systemd! Try to continue anyway..."
+  fi
+  
+  # Loop the chores
+  while [ "$ITERATION" -le "$SS_INSTCOUNT" ]
+    do
+      # Get the first free port from the list
+      PORT=$(echo -e "$SS_PORTLIST" | head -n 1 )
+      
+      # Check if that worked out
+      if ! echo "$PORT" | grep -E "^[0-9]+$" > /dev/null 2>&1
+        then
+          # Check if there's ports left
+          if [ "$SS_PORTLIST" = "" ]
+            then
+              # Delete the portlist file and exit on error
+              rm -f "$SS_AUTO_PORTLIST"
+              echo "No more ports available!"
+              ss_error
+          fi
+          # NEXT! Out of the door, line on the left, one cross each
+          continue
+      fi
+      # Let systemd create the symlinks needed; messaging enabled
+      if ! systemctl enable "folio-$SS_PACKAGE@$PORT"
+        then
+          # Something went wrong here - don't continue!
+          ss_error
+      fi
+      # Start the instance; ignore errors
+      systemctl start "folio-$SS_PACKAGE@$PORT" > /dev/null 2>&1
+      # Delete port from the list of available ones
+      SS_PORTLIST=$(echo -e "$SS_PORTLIST" | sed "/^$PORT$/d")
+      # Increase iteration
+      ITERATION="$(( $ITERATION + 1 ))"
+    done
+  
+  # Write the new list of available ports to the automatic portlist
+  echo -e "$SS_PORTLIST" > "$SS_AUTO_PORTLIST"
+  # Crucifixion group! Onward!
+  return 0
+}
+
+# Sort out all available ports
+ss_sortports() {
+  # Takes the range as parameter 1 and the list of blocked ports as parameter 2
+  # Returns 0 on success
+  # Returns 1 on failure
+  # Echoes the sorted list of all available ports
+
+  # Local variables
+  local BEGIN
+  local BLOCKLIST="$2"
+  local END
+  local i
+  local PORTLIST
+  local RANGE="$1"
+  local SELECTION
+  
+  # Separate upper and lower boundary
+  BEGIN=$(echo "$RANGE" | cut -d "-" -f 1 -s)
+  END=$(echo "$RANGE" | cut -d "-" -f 2 -s)
+  
+  # Expand the range to a list.
+  for (( i=$BEGIN; i<=$END; i++ ))
+    do
+      PORTLIST="$PORTLIST\n$i"
+    done
+  # Need to reformat the lists to recognize newlines; also for comm to work
+  # we need to sort on a per-character basis, NOT the numeric order
+  BLOCKLIST=$(echo -e "$BLOCKLIST" | sort -u)
+  PORTLIST=$(echo -e "$PORTLIST" | sort -u)
+  
+  # Get the sorted list of available ports, make sure it's only ports there
+  SELECTION=$(comm -23 <(echo "$PORTLIST") <(echo "$BLOCKLIST") | grep -E "^[0-9]+$" | sort -nu )
+  
+  if [ "$SELECTION" = "" ]
+    then
+      # We regard this as a failure, as an empty list means being out of options
+      return 1
+  fi
+  # We have a list, that's a good one
+  echo "$SELECTION"
+  return 0
+}
+
+
+# =============================== Prerequisites ===============================
+
+# We're setting the path variable anew because some systems have that wrong
+PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# Get script location
+OS_SCRIPT="${BASH_SOURCE[0]}"
+
+# Check if being root
+if [ "$(whoami)" != "root" ]
+  then
+    echo "$OS_SCRIPT has to be invocated as root!"
+    exit 1
+fi
+
+# Get parameters
+SS_PACKAGE="$1"
+
+# Check mandatory parameter
+if [ "$SS_PACKAGE" = "" ]
+  then
+    echo -e "\nNo package was given, no setup will be performed."
+    echo "Usage: setup_service <package>"
+    exit 1
+fi
+
+# Check for automated setups
+if [ -d "$SS_AUTOSETUP_DIR" ]
+  then
+    SS_AUTOSETUP="1"
+# This is if called by a metapackage to do the hard work prior to installing
+# everything
+elif [ "$SS_PACKAGE" = "folio-full" -o "$SS_PACKAGE" = "folio-core" ]
+  then
+    # Create directory
+    mkdir -p "$SS_AUTOSETUP_DIR"
+    # Set variables
+    SS_AUTOSETUP="1"
+    SS_SKIPDEPLOY="1"
+fi
+
+# Set absolute paths (no harm if not in autosetup mode)
+SS_AUTOSETUP_INSTCOUNT="$SS_AUTOSETUP_DIR/$SS_AUTOSETUP_INSTCOUNT"
+SS_AUTOSETUP_PORTRANGE="$SS_AUTOSETUP_DIR/$SS_AUTOSETUP_PORTRANGE"
+
+
+# =================================== Main ====================================
+
+# Check if a previous script already calculated the available ports
+if [ -f "$SS_AUTO_PORTLIST" ]
+  then
+    SS_PORTLIST=$(<"$SS_AUTO_PORTLIST")
+  else
+    SS_PORTLIST=$(ss_portlist)
+fi
+
+# Check if the port range is containing something
+if [ "$SS_PORTLIST" = "" ]
+  then
+    # Can't continue that way!
+    echo "No more ports available!"
+    ss_error
+fi
+
+# Try to get the instance count automatically
+if ! SS_INSTCOUNT=$(ss_getinstcount_autosetup)
+  then
+    # Fall back to user interaction
+    SS_INSTCOUNT=$(ss_getinstcount_feedback)
+fi
+
+# Check if the port range is containing something
+if [ "$SS_INSTCOUNT" = "" ]
+  then
+    # Can't continue that way!
+    ss_error
+fi
+
+# End here, if the invocating entity was a metapackage
+if [ "$SS_SKIPDEPLOY" = "1" ]
+  then
+    exit 0
+fi
+
+# Set up the instances
+if ! ss_setup
+  then
+    ss_error
+fi
+
+# If we arrive here, all was handled
+exit 0
