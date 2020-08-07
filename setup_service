@@ -5,7 +5,7 @@
 
 
 # ================================= Copyright =================================
-# Version 0.0.1 (2020-08-07), Copyright (C) 2020
+# Version 0.0.2 (2020-08-07), Copyright (C) 2020
 # Author: Jo Drexl (johannes.drexl@lrz.de) for FOLIO
 # Coauthors: -
 
@@ -255,6 +255,7 @@ ss_error() {
   export NEWT_COLORS=""
   
   # This is the end, my friend
+  systemctl daemon-reload
   exit 0
 }
 
@@ -734,6 +735,9 @@ if ! ss_setup
   then
     ss_error
 fi
+
+# Tell systemd what we changed
+systemctl daemon-reload
 
 # If we arrive here, all was handled
 exit 0
