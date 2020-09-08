@@ -15,7 +15,7 @@
 
 
 # ================================= Copyright =================================
-# Version 0.3.0 (2020-08-03), Copyright (C) 2020
+# Version 0.3.1 (2020-09-08), Copyright (C) 2020
 # Author: Jo Drexl (johannes.drexl@lrz.de) for FOLIO
 # Coauthors: -
 
@@ -65,6 +65,7 @@ CT_TENANT_REGFILE=".tenants"
 
 # Lock file destination (shutdown only)
 CT_LOCKFILE="/dev/shm/$MODULE.lock"
+
 
 # ================================= Functions =================================
 
@@ -651,11 +652,11 @@ if [ "$MODULE" = "" ]
     exit 1
 fi
 # Check for per-port okapi_multi files
-if [ -f "$CT_OKAPIFILE-$PORT" -o -L "$CT_OKAPIFILE-$PORT" ]
+if [ -f "$CT_OKAPIFILE-$PORT" ]
   then
     CT_OKAPIFILE="$CT_OKAPIFILE-$PORT"
 # Check for a single okapi_multi file
-elif [ ! -f "$CT_OKAPIFILE" -a ! -L "$CT_OKAPIFILE" ]
+elif [ ! -f "$CT_OKAPIFILE" ]
   then
     if [ "$OKAPI_HOST" = "" ]
       then
@@ -683,12 +684,12 @@ if [ ! -f "$JSON_FILE" ]
 fi
 
 # Check for a port specific tenants file
-if [ -f "$CT_TENANTFILE-$PORT" -o -L "$CT_TENANTFILE-$PORT" ]
+if [ -f "$CT_TENANTFILE-$PORT" ]
   then
     CT_TENANTFILE="$CT_TENANTFILE-$PORT"
   else
     # FALLBACK: Check for a general tenants file
-    if [ ! -f "$CT_TENANTFILE" -a ! -L "$CT_TENANTFILE" ]
+    if [ ! -f "$CT_TENANTFILE" ]
       then
         echo "FATAL: Tenants config file missing ($CT_TENANTFILE[-$PORT])!"
         exit 1
@@ -750,7 +751,7 @@ case "$CT_ACTION" in
       then
         CT_OKAPI="$OKAPI_HOST:$OKAPI_PORT"
     fi
-    if [ -f "$CT_OKAPIFILE" -o -L "$CT_OKAPIFILE" ]
+    if [ -f "$CT_OKAPIFILE" ]
       then
         CT_OKAPI="$(echo -e "$CT_OKAPI\n$(<"$CT_OKAPIFILE")")"
     fi

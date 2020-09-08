@@ -7,7 +7,7 @@
 
 
 # ================================= Copyright =================================
-# Version 0.0.1 (2020-07-14), Copyright (C) 2020
+# Version 0.0.2 (2020-09-08), Copyright (C) 2020
 # Author: Jo Drexl (johannes.drexl@lrz.de) for FOLIO
 # Coauthors: -
 
@@ -66,7 +66,7 @@ fm_gathertenants() {
   while read FILE
     do
       # Check if it's really a file (or a symlink at least)
-      if [ ! -f "$FILE" -a ! -L "$FILE" ]
+      if [ ! -f "$FILE" ]
         then
           # Can't read stuff other than a file
           continue
@@ -235,7 +235,7 @@ if [ "$FM_PACKAGE" = "folio-full" -o "$FM_PACKAGE" = "folio-core" ]
 fi
 
 # Check if there's already a config
-if [ -f "$FM_CONFIG" -o -L "$FM_CONFIG" ]
+if [ -f "$FM_CONFIG" ]
   then
     # On automated installs use the config and don't change anything
     if [ "$FM_AUTOMATIC" = "1" ]

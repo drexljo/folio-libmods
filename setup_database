@@ -5,7 +5,7 @@
 
 
 # ================================= Copyright =================================
-# Version 0.1.1 (2020-07-14), Copyright (C) 2020
+# Version 0.2.1 (2020-09-08), Copyright (C) 2020
 # Author: Jo Drexl (johannes.drexl@lrz.de) for FOLIO
 # Coauthors: -
 
@@ -41,14 +41,15 @@ FM_CONFFILE="dbcredentials.env"
 # to if it's already existing
 FM_PGHBACONF="/tmp/folio_pg_hba.conf"
 
-# Path to a file that indicates automated install - it also contains the prefix 
-# for users and databases
-FM_AUTOFILE="/tmp/folio_autosetup"
-# Path to a temporary server settings file for subsequent installs
-FM_PGSERVERFILE="/tmp/folio_pgserver"
-# Path to temporary file which signals to setup the database server in 
-# automated installs
-FM_PGSERVER_SETUP="/tmp/folio_pgsetup"
+# Path to the directory that indicates automated install
+FM_AUTOSETUP_DIR="/tmp/folio_autosetup"
+# Autosetup file that contains the prefix for users and databases
+FM_AUTOSETUP_PREFIXES="db_prefixes"
+# Path to a server settings file
+FM_AUTOSETUP_PGSERVER="db_server"
+# Path to a file which signals to setup the database server in automated setups
+# Contains the superuser credentials if the database server is to be set up
+FM_AUTOSETUP_PGSETUP="db_setup"
 
 
 # ================================= Functions =================================
@@ -146,27 +147,13 @@ fm_askserver() {
 fm_askserversetup() {
   # Takes no parameters
   # Returns 0
-  
-  # Local variables
-  local SUCCESS=""
 
   # General question if database is to be prepared
   if whiptail --title "$FM_HEADLINE - PostgreSQL server setup" --yesno \
     "Set up PostgreSQL server now?" 8 78
     then
-      # Create the signal file for the database setup afterwards
-      touch "$FM_PGSERVER_SETUP"
-      # Check if we already have working superuser credentials for the server, 
-      # because if so, asking would be futile
-      if [ "$FM_PGSERVER" = "$FM_PGSERVER_DEFAULT" -a "$FM_PGPORT" = "$FM_PGPORT_DEFAULT" ]
-        then
-          if [ "$FM_PGSUNAME" != "" ]
-            then
-              return 0
-          fi
-      fi
       # Ask for superuser credentials
-      while [ "$SUCCESS" = "" ]
+      while true
         do
           # Superuser name
           if ! FM_PGSUNAME=$(whiptail --title "$FM_HEADLINE - PostgreSQL server setup" \
@@ -191,7 +178,6 @@ fm_askserversetup() {
           export PGPASSWORD
           if psql -h "$FM_PGSERVER" -p "$FM_PGPORT" -U "$FM_PGSUNAME" -c 'SELECT rolconnlimit FROM pg_authid;' postgres > /dev/null 2>&1
             then
-              SUCCESS="1"
               return 0
             else
               export NEWT_COLORS='root=,red'
@@ -210,7 +196,11 @@ fm_askserversetup() {
 # Exit on cancel during PostgreSQL setup
 fm_pgcancel() {
   # Takes no parameters
+  # Sets FM_NOSETUP
   # Returns 0
+  
+  # Global variables
+  FM_NOSETUP="1"
   
   export NEWT_COLORS='root=,red'
   whiptail --title "$FM_HEADLINE - Abort" --msgbox \
@@ -277,18 +267,25 @@ if [ "$FM_PACKAGE" = "" ]
     exit 1
 fi
 
-# Set variables
+# Set variables & absolute paths
 FM_CONFIG="$FM_CONFPATH/$FM_PACKAGE/$FM_CONFFILE"
 FM_TEMP="/tmp/setup_database-$FM_PACKAGE-$$"
+FM_AUTOSETUP_PGSERVER="$FM_AUTOSETUP_DIR/$FM_AUTOSETUP_PGSERVER"
+FM_AUTOSETUP_PGSETUP="$FM_AUTOSETUP_DIR/$FM_AUTOSETUP_PGSETUP"
+FM_AUTOSETUP_PREFIXES="$FM_AUTOSETUP_DIR/$FM_AUTOSETUP_PREFIXES"
 
 # Check for automated install
-if [ -f "$FM_AUTOFILE" ]
+if [ -d "$FM_AUTOSETUP_DIR" ]
   then
     FM_AUTOMATIC="1"
+    # Set 
     # Read user prefix for database server
-    FM_PGUSERPREFIX=$(head -n 1 "$FM_AUTOFILE")
+    FM_PGUSERPREFIX=$(head -n 1 "$FM_AUTOSETUP_PREFIXES")
     # Read database prefix for database server
-    FM_PGDBPREFIX=$(tail -n 1 "$FM_AUTOFILE")
+    FM_PGDBPREFIX=$(tail -n 1 "$FM_AUTOSETUP_PREFIXES")
+    # Set empty prefixes to 'folio'
+    FM_PGUSERPREFIX="${FM_PGUSERPREFIX:-folio}"
+    FM_PGDBPREFIX="${FM_PGDBPREFIX:-folio}"
 fi
 
 # Check if there's already a config
@@ -311,9 +308,9 @@ fi
 
 # If there was a previous install script, there should be a file for all 
 # necessary server information - source it!
-if [ -f "$FM_PGSERVERFILE" ]
+if [ -f "$FM_AUTOSETUP_PGSERVER" ]
   then
-    . "$FM_PGSERVERFILE"
+    . "$FM_AUTOSETUP_PGSERVER"
   else
     # If we don't have that, let's try to be clever and check if there is
     # already a folio module config file, which can tell us about the server
@@ -345,24 +342,41 @@ if [ "$FM_AUTOMATIC" = "1" ]
     # Read prefix for database user
     # Set individual defaults
     FM_HEADLINE="Folio modules"
-    FM_PGDATABASE="${FM_PGDBPREFIX}_${FM_PACKAGE:4}"
-    FM_PGUSER="${FM_PGUSERPREFIX}_${FM_PACKAGE:4}"
+    FM_PGDATABASE="${FM_PGDBPREFIX}_mod_${FM_PACKAGE:4}"
+    FM_PGUSER="${FM_PGUSERPREFIX}_mod_${FM_PACKAGE:4}"
     # Ask only if we don't have the necessary information yet
-    if [ ! -f "$FM_PGSERVERFILE" ]
+    # Server connection information
+    if [ -f "$FM_AUTOSETUP_PGSERVER" ]
       then
+        # Source the file
+        . "$FM_AUTOSETUP_PGSERVER"
+      else
         fm_askserver
+        # Create the file
+        echo -e "FM_PGSERVER=\"$FM_PGSERVER\"\nFM_PGPORT=\"$FM_PGPORT\"" > "$FM_AUTOSETUP_PGSERVER"
+    fi
+    # Superuser credentials for the server, or if setup should be done
+    if [ -f "$FM_AUTOSETUP_PGSETUP" ]
+      then
+        # Check if the file is empty (which indicates no serverside setup)
+        if [ "$(<"$FM_AUTOSETUP_PGSETUP")" = "" ]
+          then
+            FM_NOSETUP="1"
+          else
+            # Source the file
+            . "$FM_AUTOSETUP_PGSETUP"
+        fi
+      else
         fm_askserversetup
         # Create the file for all following scripts
-        touch "$FM_PGSERVERFILE"
-        chown root:root "$FM_PGSERVERFILE"
-        chmod 600 "$FM_PGSERVERFILE"
-        echo -e "FM_PGSERVER=\"$FM_PGSERVER\"
-FM_PGPORT=\"$FM_PGPORT\"
-FM_PGSUNAME=\"$FM_PGSUNAME\"
-PGPASSWORD=\"$PGPASSWORD\"" > "$FM_PGSERVERFILE"
-        # Timebomb the file, since we don't want superuser credentials lying
-        # around on a system, even with secure permissions
-        sleep 300 && rm -f "$FM_PGSERVERFILE" &
+        touch "$FM_AUTOSETUP_PGSETUP"
+        chown root:root "$FM_AUTOSETUP_PGSETUP"
+        chmod 600 "$FM_AUTOSETUP_PGSETUP"
+        # Only fill the file, if setup should be done
+        if [ "$FM_NOSETUP" != "1" ]
+          then
+            echo -e "FM_PGSUNAME=\"$FM_PGSUNAME\"\nPGPASSWORD=\"$PGPASSWORD\"" > "$FM_AUTOSETUP_PGSETUP"
+        fi
     fi
   else
     # Set individual defaults
@@ -381,7 +395,13 @@ if [ "$FM_PGPASSWD" = "" ]
     FM_PGPASSWD=$(</dev/urandom tr -dc 'A-Za-z0-9!#$%&()*+,-./:;<>?@[]^_`{|}~' | head -c 24)
   else
     # Strip forbidden characters to avoid problems
-    FO_PGPASSWD=$(echo "$FO_PGPASSWD" | tr -dc 'A-Za-z0-9!#$%&()*+,-./:;<>?@[]^_`{|}~')
+    FM_TEMPVAR=$(echo "$FM_PGPASSWD" | tr -dc 'A-Za-z0-9!#$%&()*+,-./:;<>?@[]^_`{|}~')
+    # Message the user, if something had to be changed
+    if [ "$FM_TEMPVAR" != "$FM_PGPASSWD" ]
+      then
+        echo "Your provided module password contained forbidden characters; was autocorrected."
+    fi
+    FM_PGPASSWD="$FM_TEMPVAR"
 fi
 
 # Write the settings to the environment file, setting it secure first
@@ -403,7 +423,7 @@ if [ -f "$FM_PGHBACONF" ]
     echo "host    $FM_PGDATABASE    $FM_PGUSER    ${FM_IP:5}/32    md5" >> "$FM_PGHBACONF"
 fi
 
-if [ -f "$FM_PGSERVER_SETUP" ]
+if [ "$FM_NOSETUP" != "1" ]
   then
     # Do the setup
     if ! fm_serversetup
@@ -412,12 +432,6 @@ if [ -f "$FM_PGSERVER_SETUP" ]
         whiptail --title "$FM_PACKAGE - Server setup error" --msgbox \
           "Database setup ran into an error! Please check manually." 8 78
     fi
-fi
-
-# Delete the file that indicates the setup for the server
-if [ "$FM_AUTOMATIC" != "1" ]
-  then
-    rm -f "$FM_PGSERVER_SETUP"
 fi
 
 # Remove temp file
