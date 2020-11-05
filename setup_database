@@ -5,7 +5,7 @@
 
 
 # ================================= Copyright =================================
-# Version 0.2.1 (2020-09-08), Copyright (C) 2020
+# Version 0.2.2 (2020-11-05), Copyright (C) 2020
 # Author: Jo Drexl (johannes.drexl@lrz.de) for FOLIO
 # Coauthors: -
 
@@ -50,6 +50,8 @@ FM_AUTOSETUP_PGSERVER="db_server"
 # Path to a file which signals to setup the database server in automated setups
 # Contains the superuser credentials if the database server is to be set up
 FM_AUTOSETUP_PGSETUP="db_setup"
+# File that signals db server setup was already asked and not wished for
+FM_AUTOSETUP_PGSKIP="db_skip"
 
 
 # ================================= Functions =================================
@@ -273,19 +275,42 @@ FM_TEMP="/tmp/setup_database-$FM_PACKAGE-$$"
 FM_AUTOSETUP_PGSERVER="$FM_AUTOSETUP_DIR/$FM_AUTOSETUP_PGSERVER"
 FM_AUTOSETUP_PGSETUP="$FM_AUTOSETUP_DIR/$FM_AUTOSETUP_PGSETUP"
 FM_AUTOSETUP_PREFIXES="$FM_AUTOSETUP_DIR/$FM_AUTOSETUP_PREFIXES"
+FM_AUTOSETUP_PGSKIP="$FM_AUTOSETUP_DIR/$FM_AUTOSETUP_PGSKIP"
 
 # Check for automated install
 if [ -d "$FM_AUTOSETUP_DIR" ]
   then
     FM_AUTOMATIC="1"
-    # Set 
-    # Read user prefix for database server
-    FM_PGUSERPREFIX=$(head -n 1 "$FM_AUTOSETUP_PREFIXES")
-    # Read database prefix for database server
-    FM_PGDBPREFIX=$(tail -n 1 "$FM_AUTOSETUP_PREFIXES")
-    # Set empty prefixes to 'folio'
-    FM_PGUSERPREFIX="${FM_PGUSERPREFIX:-folio}"
-    FM_PGDBPREFIX="${FM_PGDBPREFIX:-folio}"
+    FM_PGDBPREFIX=""
+    FM_PGUSERPREFIX=""
+    # Read prefix file, if existing
+    if [ -f "$FM_AUTOSETUP_PREFIXES" ]
+      then
+        . "$FM_AUTOSETUP_PREFIXES"
+    fi
+    # Fallback: Ask the user and write the prefix file
+    while [ "$FM_PGDBPREFIX" = "" ]
+      do
+        if ! FM_PGDATABASE=$(whiptail --title "$FM_HEADLINE - Automated PostgreSQL setup" \
+          --inputbox "Provide postgres database prefix for all modules (mind allowed characters):" \
+          8 78 folio 3>&1 1>&2 2>&3)
+          then
+            fm_cancel
+        fi
+        # Can't check this
+      done
+    while [ "$FM_PGUSERPREFIX" = "" ]
+      do
+        if ! FM_PGDATABASE=$(whiptail --title "$FM_HEADLINE - Automated PostgreSQL setup" \
+          --inputbox "Provide postgres username prefix for all modules (mind allowed characters):" \
+          8 78 folio 3>&1 1>&2 2>&3)
+          then
+            fm_cancel
+        fi
+        # Can't check this
+      done
+    # Write the prefix file
+    echo -e "FM_PGDBPREFIX=\"$FM_PGDBPREFIX\"\nFM_PGUSERPREFIX=\"$FM_PGUSERPREFIX\"" > "$FM_AUTOSETUP_PREFIXES"
 fi
 
 # Check if there's already a config
@@ -366,6 +391,9 @@ if [ "$FM_AUTOMATIC" = "1" ]
             # Source the file
             . "$FM_AUTOSETUP_PGSETUP"
         fi
+    elif [ -f "$FM_AUTOSETUP_PGSKIP" ]
+      then
+        FM_NOSETUP = "1"
       else
         fm_askserversetup
         # Create the file for all following scripts
@@ -373,8 +401,10 @@ if [ "$FM_AUTOMATIC" = "1" ]
         chown root:root "$FM_AUTOSETUP_PGSETUP"
         chmod 600 "$FM_AUTOSETUP_PGSETUP"
         # Only fill the file, if setup should be done
-        if [ "$FM_NOSETUP" != "1" ]
+        if [ "$FM_NOSETUP" = "1" ]
           then
+            touch "$FM_AUTOSETUP_PGSKIP"
+          else
             echo -e "FM_PGSUNAME=\"$FM_PGSUNAME\"\nPGPASSWORD=\"$PGPASSWORD\"" > "$FM_AUTOSETUP_PGSETUP"
         fi
     fi
