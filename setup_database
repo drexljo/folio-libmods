@@ -5,7 +5,7 @@
 
 
 # ================================= Copyright =================================
-# Version 0.3.0 (2020-11-09), Copyright (C) 2020
+# Version 0.3.1 (2020-11-10), Copyright (C) 2020
 # Author: Jo Drexl (johannes.drexl@lrz.de) for FOLIO
 # Coauthors: -
 
@@ -227,7 +227,7 @@ fm_askserversetup() {
       export PGPASSWORD="$FM_PGSUPASSWD"
       if psql -h "$FM_PGSERVER" -p "$FM_PGPORT" -U "$FM_PGSUNAME" -c 'SELECT rolconnlimit FROM pg_authid;' postgres > /dev/null 2>&1
         then
-          return 0
+          break
         else
           export NEWT_COLORS='root=,red'
           whiptail --title "$FM_HEADLINE - Failure!" --msgbox \
