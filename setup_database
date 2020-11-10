@@ -5,7 +5,7 @@
 
 
 # ================================= Copyright =================================
-# Version 0.3.1 (2020-11-10), Copyright (C) 2020
+# Version 0.3.2 (2020-11-10), Copyright (C) 2020
 # Author: Jo Drexl (johannes.drexl@lrz.de) for FOLIO
 # Coauthors: -
 
@@ -401,20 +401,21 @@ if [ "$FM_AUTOMATIC" = "1" ]
       then
         fm_askprefix
     fi
+    # Import created config file
+    . "$FM_AUTOSETUP_PREFIXES"
     # Ask for server information and create the file, if necessary
     if [ ! -f "$FM_AUTOSETUP_PGSERVER" ]
       then
         fm_askserver
     fi
+    # Import created config file
+    . "$FM_AUTOSETUP_PGSERVER"
     # Ask for setup information and create the file, if necessary
     if [ ! -f "$FM_AUTOSETUP_PGSETUP" ]
       then
         fm_askserversetup
     fi
-
-    # Import autosetup config files
-    . "$FM_AUTOSETUP_PREFIXES"
-    . "$FM_AUTOSETUP_PGSERVER"
+    # Import created config file
     if [ "$(<"$FM_AUTOSETUP_PGSETUP")" = "" ]
       then
         FM_NOSETUP="1"
