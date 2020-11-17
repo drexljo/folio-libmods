@@ -1,0 +1,603 @@
+#!/bin/bash
+
+# manage_descriptors
+# It's basically a cleanup tool for module descriptors in Okapi instances
+# May take the okapi instance to connect to as parameter 1 and the module to 
+# manage as parameter 2. Will try to be clever if one or both are omitted.
+
+
+# ================================= Copyright =================================
+# Version 0.0.1 (2020-07-23), Copyright (C) 2020
+# Author: Jo Drexl (johannes.drexl@lrz.de) for FOLIO
+# Coauthors: -
+
+#   This file is part of the LRZ FOLIO debian package
+
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+
+#    http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+#   On Debian systems, the full text of the Apache License version 2.0
+#   can be found in the file 
+#     `/usr/share/common-licenses/Apache-2.0'
+
+
+# ================================= Variables =================================
+
+# Optional file to specify multiple okapi hosts and ports
+# If there are files with -$PORT in the end, we will find and apply them
+MD_OKAPIFILE="/etc/folio/$MODULE/okapi_multi"
+
+# File to register the descriptor history, to enable cleanup; resides in $HOME
+MD_HISTORYFILE=".history"
+
+### UNFINISHED ###
+exit 1
+
+# ================================= Functions =================================
+
+# Works through all configured Okapi instances and execute md_chores for every
+# single one of them
+md_broadcast() {
+  # Expects the action as parameter 1
+  # Returns 0 on success
+  # Returns 1 on failure
+  
+  # Local variables
+  local ACTION="$1"
+  local ERRORS="0"
+  local ITERATION="0"
+  local OKAPI
+  
+  # Check for correct action
+  if [ "$ACTION" != "signoff" -a "$ACTION" != "signon" ]
+    then
+      echo "FATAL: Could not recognize action for ct_broadcast!"
+      return 1
+  fi
+  
+  # Call every okapi to register everything
+  while read -u 9 OKAPI
+    do
+      # Ignore lines with comments or spaces
+      if echo "$OKAPI" | grep -E "^(\s+)?(#.*)?$" > /dev/null 2>&1
+        then
+          continue
+      fi
+      # Check if the line makes sense (it's not perfect, but should weed out
+      # the worst misstakes)
+      if ! echo "$OKAPI" | grep -E "^[-a-z\.0-9]+:[0-9]{2,5}$" > /dev/null 2>&1
+        then
+          echo "ERROR: Configured okapi instance '$OKAPI' makes no sense to me."
+          ERRORS=$(( $ERRORS + 1 ))
+          # No need to break the whole endeavour, just continue
+          continue
+      fi
+      
+      # Work the chores
+      if ! ct_chores "$OKAPI" "$ACTION"
+        then
+          echo "ERROR: Could not deal successfully with '$OKAPI'!"
+          ERRORS=$(( $ERRORS + 1 ))
+          continue
+      fi
+      
+      # Count iterations
+      ITERATION=$(( $ITERATION + 1 ))
+    done 9<<< "$(echo "$CT_OKAPI")"
+  
+  # Report
+  echo "INFO: Communication with $ITERATION Okapi servers successful."
+  if [ "$ERRORS" != "0" ]
+    then
+      echo "ERROR: Communication with $ERRORS Okapi servers failed."
+  fi
+  return 0  
+}
+
+# Deregister module from Okapi
+ct_bye() {
+  # Expects the okapi to connect to as parameter 1
+  # Returns 0 on success
+  # Returns 1 on failure
+  
+  # Local variables
+  local OKAPI="$1"
+  local RETURN
+  
+  # Check for Okapi to be set
+  if [ "$OKAPI" = "" ]
+    then
+      echo "FATAL: Okapi was not provided for ct_bye."
+      return 1
+  fi
+  
+  # Delete module instance from Okapi
+  if ! RETURN=$(curl -D - -s -w '\n' -X DELETE http://$OKAPI/_/deployment/modules/$CT_MODULE_ID/$HOST-$PORT)
+    then
+      echo "FATAL: Could not deregister module '$CT_MODULE_ID' from Okapi!"
+      return 1
+  fi
+  # Interpret return message
+  if echo -e "$RETURN" | grep "HTTP/1.1 204 No Content" > /dev/null 2>&1
+    then
+      echo "INFO: Module deregistered from Okapi."
+      # Delete the okapi instance form the registry file
+      sed -i "/^$OKAPI$/d" "$CT_OKAPI_REGFILE"
+      return 0
+    else
+      echo -e "WARN: Okapi answered with unknown message:\n$RETURN"
+      return 1
+  fi
+}
+
+# Takes care of the chores
+ct_chores() {
+  # Expects the okapi to connect to as parameter 1 and the action as parameter 2
+  # Returns 0 on success
+  # Returns 1 on failure
+  
+  # Local variables
+  local ACTION="$2"
+  local ERRORS="0"
+  local OKAPI="$1"
+  local MODULE_ACTION
+  local TENANT_ACTION
+  
+  # Check for Okapi to be set
+  if [ "$OKAPI" = "" ]
+    then
+      echo "FATAL: Okapi was not provided for ct_chores."
+      return 1
+  fi
+
+  # Work through actions to be done
+  case "$ACTION" in
+    signoff)
+      # Call okapi to disable module for all tenants
+      if ! ct_runway "$OKAPI" touchdown
+        then
+          # Even with errors the show must go on, but we quit with error in
+          # the end nonetheless!
+          ERRORS="1"
+      fi
+      # Call okapi to disable module
+      if ! ct_bye "$OKAPI"
+        then
+          # Messaging has already been taken care of
+          ERRORS="1"
+      fi
+      # Quit on error, if necessary
+      if [ "$ERRORS" = "1" ]
+        then
+          return 1
+      fi
+      ;;
+    signon)
+      # Call okapi to enable module
+      if ! ct_hello "$OKAPI"
+        then
+          # Messaging has already been taken care of
+          return 1
+      fi
+      # Call okapi to enable module for all tenants
+      if ! ct_runway "$OKAPI" liftoff
+        then
+          # Messaging has already been taken care of
+          return 1
+      fi
+      ;;
+    *)
+      # Should not happen
+      echo "FATAL: Unrecognized action!"
+      ;;
+  esac
+  return 0
+}
+
+# Register module to Okapi
+ct_hello() {
+  # Expects the okapi to connect to as parameter 1
+  # Returns 0 on success
+  # Returns 1 on failure
+  
+  # Local variables
+  local OKAPI="$1"
+  local RETURN
+  
+  # Check for Okapi to be set
+  if [ "$OKAPI" = "" ]
+    then
+      echo "FATAL: Okapi was not provided for ct_hello."
+      return 1
+  fi
+  
+  # Register module itself
+  if ! RETURN=$(curl -D - -s -w '\n' -X POST -H "Content-type: application/json" \
+    -d @"$CT_TMPJSON_HELLO" http://$OKAPI/_/deployment/modules)
+    then
+      echo "FATAL: Could not register module '$CT_MODULE_ID' to Okapi!"
+      return 1
+  fi
+  # Interpret return message
+  if echo -e "$RETURN" | grep "HTTP/1.1 201 Created" > /dev/null 2>&1
+    then
+      # Register Okapi instance to registry file
+      echo "$OKAPI" >> "$CT_OKAPI_REGFILE"
+      echo "INFO: Module registered with Okapi."
+      return 0
+    else
+      echo -e "ERROR: Okapi answered with unknown message:\n$RETURN"
+      return 1
+  fi
+}
+
+# Create JSON to register module to Okapi
+ct_jsonhello() {
+  # Returns 0 on success
+  # Returns 1 on failure
+  
+  echo -e  "{
+  \"url\": \"http://$HOST:$PORT\",
+  \"srvcId\": \"$CT_MODULE_ID\"\n}" > "$CT_TMPJSON_HELLO" 2>/dev/null
+
+  # Check if that worked out
+  if [ "$?" = "0" ]
+    then
+      return 0
+    else
+      return 1
+  fi
+}
+
+# Create JSON to bind module to tenants
+ct_jsontenant() {
+  # Returns 0 on success
+  # Returns 1 on failure
+  
+  echo -e "{\n  \"id\": \"$CT_MODULE_ID\"\n}" > "$CT_TMPJSON_TENANTS" 2>/dev/null
+
+  # Check if that worked out
+  if [ "$?" = "0" ]
+    then
+      return 0
+    else
+      return 1
+  fi
+}
+
+# Bind module to tenant
+ct_liftoff() {
+  # Expects the okapi to connect to as parameter 1 and the tenant as parameter 2
+  # Returns 0 on success
+  # Returns 1 on failure
+  
+  # Local variables
+  local OKAPI="$1"
+  local TENANT="$2"
+  
+  # Check variables
+  if [ "$OKAPI" = "" ]
+    then
+      echo "FATAL: Okapi was not provided for ct_liftoff."
+      return 1
+  fi
+  if [ "$TENANT" = "" ]
+    then
+      # Can not do anything here
+      echo "ERROR: No tenant provided to ct_liftoff!"
+      return 1
+  fi
+  
+  # Register module for tenant
+  if ! RETURN=$(curl -D - -s -w '\n' -X POST -H "Content-type: application/json" \
+    -d @"$CT_TMPJSON_TENANTS" http://$OKAPI/_/proxy/tenants/$TENANT/modules)
+    then
+      echo "ERROR: Could not bind module '$CT_MODULE_ID' to tenant '$TENANT'!"
+      return 1
+  fi
+  
+  # Interpret return message
+  if echo -e "$RETURN" | grep "HTTP/1.1 201 Created" > /dev/null 2>&1
+    then
+      # Write tenant to the registry file
+      echo "$TENANT" >> "$CT_TENANT_REGFILE"
+      echo "INFO: Module bound to tenant '$TENANT'."
+      return 0
+    else
+      echo -e "WARN: Okapi answered with unknown message:\n$RETURN"
+      return 1
+  fi
+}
+
+# Tenant handling
+ct_runway() {
+  # Expects the okapi to connect to as parameter 1 and the action as parameter 2
+  # Returns 0 on success
+  # Returns 1 on failure
+  
+  # Local variables
+  local ACTION="$2"
+  local ERRORS="0"
+  local FUNCTION
+  local OKAPI="$1"
+  local TENANT
+  local TENANTFILE
+
+  # Check for Okapi to be set
+  if [ "$OKAPI" = "" ]
+    then
+      echo "FATAL: Okapi was not provided for ct_runway."
+      return 1
+  fi
+  
+  # Select function for action
+  case "$ACTION" in
+    liftoff)
+      FUNCTION="ct_liftoff"
+      TENANTFILE="$CT_TENANTFILE"
+      ;;
+    touchdown)
+      FUNCTION="ct_touchdown"
+      TENANTFILE="$CT_TENANT_REGFILE"
+      ;;
+    *)
+      echo "FATAL: Could not recognize action for ct_runway!"
+      return 1
+      ;;
+  esac
+  
+  # Read tenants file
+  while read -u 8 TENANT
+    do
+      # Ignore lines with comments or spaces
+      if echo "$TENANT" | grep -E "^(\s+)?(#.*)?$" > /dev/null 2>&1
+        then
+          continue
+      fi
+      
+      # Execute function for the read tenant
+      if ! $FUNCTION "$OKAPI" "$TENANT"
+        then
+          # Just count
+          ERRORS="$(( $ERRORS + 1 ))"
+      fi
+    done 8< "$TENANTFILE"
+  
+  # Errors on touchdown are critical
+  if [ "$ACTION" = "touchdown" -a "$ERRORS" != "0" ]
+    then
+      echo "CRITICAL: Errors occured while deregistrating modules! Check Okapi!"
+      return 1
+  fi
+  
+  # Jump back
+  return 0
+}
+
+# Unbind module from tenant
+ct_touchdown() {
+  # Expects the okapi to connect to as parameter 1 and the tenant as parameter 2
+  # Returns 0 on success
+  # Returns 1 on failure
+
+  # Local variables
+  local OKAPI="$1"
+  local TENANT="$2"
+  
+  # Check variables
+  if [ "$OKAPI" = "" ]
+    then
+      echo "FATAL: Okapi was not provided for ct_touchdown."
+      return 1
+  fi
+  if [ "$TENANT" = "" ]
+    then
+      # Can not do anything here
+      echo "ERROR: No tenant provided to ct_touchdown!"
+      return 1
+  fi
+  
+  # Race condition handling
+  if ! grep -E "^$TENANT$" "$CT_TENANT_REGFILE" > /dev/null 2>&1
+    then
+      # Tenant is no longer registered (was registered twice on error)
+      return 0
+  fi
+  # Deregister module for tenant
+  if ! RETURN=$(curl -D - -s -w '\n' -X DELETE http://$OKAPI/_/proxy/tenants/$TENANT/modules/$CT_MODULE_ID)
+    then
+      echo "ERROR: Could not unbind module '$CT_MODULE_ID' from tenant '$TENANT'!"
+      return 1
+  fi
+  
+  # Interpret return message
+  if echo -e "$RETURN" | grep "HTTP/1.1 204 No Content" > /dev/null 2>&1
+    then
+      # Delete the tenant form the registry file
+      sed -i "/^$TENANT$/d" "$CT_TENANT_REGFILE"
+      echo "INFO: Module unbound from tenant '$TENANT'."
+      return 0
+    else
+      echo -e "WARN: Okapi answered with unknown message:\n$RETURN"
+      return 1
+  fi
+}
+
+
+# =============================== Prerequisites ===============================
+
+# Fetch parameter
+if [ "$1" = "signoff" -o "$1" = "signon" ]
+  then
+    CT_ACTION="$1"
+  else
+    echo "FATAL: Unrecognized action!"
+    exit 1
+fi
+
+# Check for variables to be set
+if [ "$HOME" = "" ]
+  then
+    echo "FATAL: No HOME specified!"
+    exit 1
+fi
+if [ "$HOST" = "" ]
+  then
+    HOST=$(hostname --fqdn)
+fi
+if [ "$JSON_FILE" = "" ]
+  then
+    echo "FATAL: No JSON file specified!"
+    exit 1
+fi
+if [ "$MODULE" = "" ]
+  then
+    echo "FATAL: No MODULE specified!"
+    exit 1
+fi
+# Check for per-port okapi_multi files
+if [ -f "$CT_OKAPIFILE-$PORT" ]
+  then
+    CT_OKAPIFILE="$CT_OKAPIFILE-$PORT"
+# Check for a single okapi_multi file
+elif [ ! -f "$CT_OKAPIFILE" ]
+  then
+    if [ "$OKAPI_HOST" = "" ]
+      then
+        echo "FATAL: No OKAPI_HOST specified!"
+        exit 1
+    fi
+    if [ "$OKAPI_PORT" = "" ]
+      then
+        echo "FATAL: No OKAPI_PORT specified!"
+        exit 1
+    fi
+fi
+
+if [ "$PORT" = "" ]
+  then
+    echo "FATAL: No PORT specified!"
+    exit 1
+fi
+
+# Check for the JSON file
+if [ ! -f "$JSON_FILE" ]
+  then
+    echo "FATAL: JSON file missing!"
+    exit 1
+fi
+
+# Check for a port specific tenants file
+if [ -f "$CT_TENANTFILE-$PORT" ]
+  then
+    CT_TENANTFILE="$CT_TENANTFILE-$PORT"
+  else
+    # FALLBACK: Check for a general tenants file
+    if [ ! -f "$CT_TENANTFILE" ]
+      then
+        echo "FATAL: Tenants config file missing ($CT_TENANTFILE[-$PORT])!"
+        exit 1
+    fi
+fi
+
+# Read the module id (mod_xy-$VERSION)
+CT_MODULE_ID=$(grep -Em 1 "\"id\":" "$JSON_FILE" | cut -d '"' -f 4 -s)
+# Check if it's invalid
+if ! echo "$CT_MODULE_ID" | grep -E "^[-a-z]+[\.0-9]+$" > /dev/null
+  then
+    echo "FATAL: Detected module ID was '$CT_MODULE_ID', can't work with that!"
+    exit 1
+fi
+# Check if the module name fits the JSON
+if [ "$MODULE" != "$(echo "$CT_MODULE_ID" | grep -oE "[-a-z]+[a-z]")" ]
+  then
+    echo "FATAL: Module variable contains '$MODULE', but JSON is for '$(echo "$CT_MODULE_ID" | grep -oE "[-a-z]+[a-z]")'."
+    exit 1
+fi
+# Get interface name
+CT_INTERFACE=$(grep -Em 1 -A 3 "\"provides\":" "$JSON_FILE" | grep -Em 1 "\"id\":" | cut -d '"' -f 4 -s)
+# Check if it's invalid
+if ! echo "$CT_INTERFACE" | grep -E "^[-a-z0-9]+$" > /dev/null
+  then
+    echo "FATAL: Detected interface was '$CT_INTERFACE', can't work with that!"
+    exit 1
+fi
+
+# Set absolute path for the registry files
+CT_OKAPI_REGFILE="$HOME/$CT_OKAPI_REGFILE-$PORT"
+CT_TENANT_REGFILE="$HOME/$CT_TENANT_REGFILE-$PORT"
+
+# Set temp files for communication
+CT_TMPJSON_HELLO="/tmp/$MODULE-$PORT-hello.json"
+CT_TMPJSON_TENANTS="/tmp/$MODULE-$PORT-tenants.json"
+
+# Prepare environment to work with
+case "$CT_ACTION" in
+  signoff)
+    # Check if there's anything to do at all
+    if [ ! -f "$CT_OKAPI_REGFILE" ]
+      then
+        exit 0
+    fi
+    # Prepare the okapi list
+    CT_OKAPI=$(<"$CT_OKAPI_REGFILE")
+    ;;
+  signon)
+    # Prepare the okapi list
+    if [ "$OKAPI_HOST" != "" -a "$OKAPI_PORT" != "" ]
+      then
+        CT_OKAPI="$OKAPI_HOST:$OKAPI_PORT"
+    fi
+    if [ -f "$CT_OKAPIFILE" ]
+      then
+        CT_OKAPI=$(echo -e "$CT_OKAPI\n$(<"$CT_OKAPIFILE")")
+    fi
+    # Touch registry files
+    touch "$CT_OKAPI_REGFILE"
+    touch "$CT_TENANT_REGFILE"
+    # Prepare json files
+    if ! ct_jsonhello && ct_jsontenant
+      then
+        echo "FATAL: Could not create deployment JSON files!"
+        exit 1
+    fi
+    ;;
+esac
+
+
+# =================================== Main ====================================
+
+# Execute the function working through the okapi list
+if ct_broadcast "$CT_ACTION"
+  then
+    RETURN="0"
+  else
+    echo "FATAL: Exception occured while executing $1!"
+    RETURN="1"
+fi
+
+# Remove empty registry files
+if [ $(wc -l < "$CT_OKAPI_REGFILE") = "0" ]
+  then
+    rm -f "$CT_OKAPI_REGFILE"
+fi
+if [ $(wc -l < "$CT_TENANT_REGFILE") = "0" ]
+  then
+    rm -f "$CT_TENANT_REGFILE"
+fi
+    
+# Remove temp files (no problem if not existing)
+rm -f "$CT_TMPJSON_HELLO"
+rm -f "$CT_TMPJSON_TENANTS"
+
+# Exit with code derived from ct_broadcast
+exit "$RETURN"
